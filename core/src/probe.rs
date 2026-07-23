@@ -15,6 +15,8 @@ pub struct ProbeResult {
     pub is_video: bool,
     /// A *still* image: a video stream with no duration (png/jpg/webp/heic…).
     pub is_image: bool,
+    /// A spreadsheet (csv/xlsx). Detected by extension, no ffprobe.
+    pub is_sheet: bool,
     pub duration_s: f64,
     pub width: u32,
     pub height: u32,
@@ -29,12 +31,20 @@ impl ProbeResult {
         ProbeResult {
             is_video: false,
             is_image: false,
+            is_sheet: false,
             duration_s: 0.0,
             width: 0,
             height: 0,
             video_codec: String::new(),
             has_audio: false,
             audio_codec: String::new(),
+        }
+    }
+
+    fn sheet() -> Self {
+        ProbeResult {
+            is_sheet: true,
+            ..ProbeResult::none()
         }
     }
 }
@@ -55,6 +65,11 @@ pub fn extension_looks_like_image(path: &str) -> bool {
         "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "tiff", "tif", "tga",
     ];
     ext_matches(path, IMAGE_EXTS)
+}
+
+/// Spreadsheet extension we can convert (csv ⇄ xlsx). Old .xls not supported.
+pub fn extension_looks_like_sheet(path: &str) -> bool {
+    ext_matches(path, &["csv", "xlsx"])
 }
 
 /// Worth spawning ffprobe? Video or image extension, or no extension at all.
@@ -78,6 +93,11 @@ fn ext_matches(path: &str, exts: &[&str]) -> bool {
 /// `ffprobe_bin` is the path/name of the ffprobe binary (system `ffprobe`
 /// during dev, the bundled one in the shipped app).
 pub fn probe(ffprobe_bin: &str, path: &str) -> ProbeResult {
+    // Spreadsheets aren't media — recognise them by extension, skip ffprobe.
+    if extension_looks_like_sheet(path) {
+        return ProbeResult::sheet();
+    }
+
     let output = Command::new(ffprobe_bin)
         .args([
             "-v",
@@ -226,6 +246,7 @@ pub fn parse_probe_json(json: &str) -> ProbeResult {
     ProbeResult {
         is_video,
         is_image: !is_video,
+        is_sheet: false,
         duration_s,
         width: vs.width.unwrap_or(0),
         height: vs.height.unwrap_or(0),

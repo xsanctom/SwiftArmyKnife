@@ -56,6 +56,7 @@ mod tests {
         ProbeResult {
             is_video: true,
             is_image: false,
+            is_sheet: false,
             duration_s: 30.0,
             width: 1280,
             height: 720,

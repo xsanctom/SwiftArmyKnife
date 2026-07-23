@@ -6,6 +6,7 @@ import Foundation
 struct Probe {
     var isVideo: Bool
     var isImage: Bool
+    var isSheet: Bool
     var duration: Double
     var width: Int
     var height: Int
@@ -13,7 +14,7 @@ struct Probe {
     var videoCodec: String
     var audioCodec: String
 
-    var isMedia: Bool { isVideo || isImage }
+    var isMedia: Bool { isVideo || isImage || isSheet }
 }
 
 struct Preset: Identifiable, Hashable {
@@ -96,6 +97,7 @@ enum Engine {
         return Probe(
             isVideo: info.is_video,
             isImage: info.is_image,
+            isSheet: info.is_sheet,
             duration: info.duration_s,
             width: Int(info.width),
             height: Int(info.height),
@@ -106,8 +108,8 @@ enum Engine {
     }
 
     /// Preset menu for the kinds present (union for a mixed batch).
-    static func presets(video: Bool, image: Bool) -> [Preset] {
-        menu_op_ids(video, image).map { Preset(id: $0, label: op_label($0).toString()) }
+    static func presets(video: Bool, image: Bool, csv: Bool, xlsx: Bool) -> [Preset] {
+        menu_op_ids(video, image, csv, xlsx).map { Preset(id: $0, label: op_label($0).toString()) }
     }
 
     /// Fast extension-only classification: 0 = not media, 1 = video, 2 = image.

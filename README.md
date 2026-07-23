@@ -1,17 +1,19 @@
 # Swift Army Knife
 
-A tiny, native macOS app for quick media chores. Drop a **video or image** onto the
-window and pick what you want:
+A tiny, native macOS app for quick file chores. Drop **files or a whole folder** and
+pick what you want:
 
 - **Video** — Convert to MP4 · Compress · Extract audio · Make GIF
 - **Image** — Convert (JPG/PNG/WebP) · Resize · Compress
+- **Spreadsheet** — CSV ⇄ XLSX
 
-…with a live progress bar, cancel, and an Advanced sheet for tuning. Output lands
-next to the source, suffixed, and never overwrites the original. The menu adapts to
-whatever you drop — detection is content-based (ffprobe), not by extension.
+…with a live progress bar, cancel, and an Advanced sheet for tuning. Drop many files
+or a folder to batch-convert; each output lands next to its source, suffixed, never
+overwriting the original. The menu adapts to what you drop.
 
-A SwiftUI shell over a Rust engine (via [swift-bridge](https://github.com/chinedufn/swift-bridge)),
-wrapping `ffmpeg`/`ffprobe`. Apple-silicon only.
+A SwiftUI shell over a Rust engine (via [swift-bridge](https://github.com/chinedufn/swift-bridge)).
+Media go through `ffmpeg` (and macOS `sips` for HEIC + orientation); spreadsheets
+through `python3` + `openpyxl`. Apple-silicon only.
 
 ## How it works
 
@@ -54,5 +56,11 @@ parsing, cancellation, and an end-to-end pass against real ffmpeg.
 
 ## Scope
 
-Video and image files. Batch/folder drop, audio-file and PDF tools, and a bundled
-(notarized) ffmpeg are possible future additions.
+Video, image, and spreadsheet (CSV ⇄ XLSX) files, single or batched. Old binary
+`.xls`, audio-file and PDF tools, and a bundled (notarized) ffmpeg are possible
+future additions.
+
+## Requirements note
+
+Spreadsheet conversion uses Homebrew's `python3` + `openpyxl`
+(`pip3 install openpyxl`); media use `ffmpeg` (`brew install ffmpeg`).

@@ -119,6 +119,7 @@ pub fn run_stages(
         let program = match stage.tool {
             Tool::Ffmpeg => ffmpeg_bin,
             Tool::Sips => "/usr/bin/sips",
+            Tool::Python => "/opt/homebrew/bin/python3",
         };
         let mut child = Command::new(program)
             .args(&stage.args)

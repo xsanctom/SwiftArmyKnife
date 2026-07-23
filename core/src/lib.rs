@@ -119,6 +119,7 @@ mod tests {
         assert!(menu_for(&ProbeResult {
             is_video: false,
             is_image: false,
+            is_sheet: false,
             duration_s: 0.0,
             width: 0,
             height: 0,
@@ -153,6 +154,7 @@ mod tests {
         ProbeResult {
             is_video: true,
             is_image: false,
+            is_sheet: false,
             duration_s: 2.0,
             width: 320,
             height: 240,

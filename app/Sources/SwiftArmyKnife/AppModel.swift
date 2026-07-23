@@ -4,9 +4,13 @@
 import AppKit
 import SwiftUI
 
+enum FileKind {
+    case video, image, csv, xlsx
+}
+
 struct MediaFile {
     let path: String
-    let isImage: Bool // else video
+    let kind: FileKind
 }
 
 struct PresetInfo {
@@ -152,22 +156,29 @@ final class AppModel: ObservableObject {
             }
         }
 
-        // A single file gets the richer content-based probe (nice header, and
-        // catches oddities like an audio-only .webm).
+        // A single file: spreadsheets are classified by extension; media get
+        // the richer content-based probe (nice header, catches audio-only .webm).
         if mediaPaths.count == 1 {
-            let probe = Engine.probe(mediaPaths[0])
-            if probe.isMedia {
-                return Gathered(files: [MediaFile(path: mediaPaths[0], isImage: probe.isImage)], single: probe)
+            let p = mediaPaths[0]
+            switch Engine.classifyPath(p) {
+            case 3: return Gathered(files: [MediaFile(path: p, kind: .csv)], single: nil)
+            case 4: return Gathered(files: [MediaFile(path: p, kind: .xlsx)], single: nil)
+            default:
+                let probe = Engine.probe(p)
+                guard probe.isMedia else { return Gathered(files: [], single: nil) }
+                let kind: FileKind = probe.isImage ? .image : .video
+                return Gathered(files: [MediaFile(path: p, kind: kind)], single: probe)
             }
-            return Gathered(files: [], single: nil)
         }
 
         // A batch is categorised by extension — fast, no per-file subprocess.
         var files: [MediaFile] = []
         for p in mediaPaths {
             switch Engine.classifyPath(p) {
-            case 1: files.append(MediaFile(path: p, isImage: false))
-            case 2: files.append(MediaFile(path: p, isImage: true))
+            case 1: files.append(MediaFile(path: p, kind: .video))
+            case 2: files.append(MediaFile(path: p, kind: .image))
+            case 3: files.append(MediaFile(path: p, kind: .csv))
+            case 4: files.append(MediaFile(path: p, kind: .xlsx))
             default: break
             }
         }
@@ -175,22 +186,35 @@ final class AppModel: ObservableObject {
     }
 
     private func buildPresetInfo() -> PresetInfo {
-        let videos = files.filter { !$0.isImage }.count
-        let images = files.count - videos
-        let presets = Engine.presets(video: videos > 0, image: images > 0)
+        let videos = files.filter { $0.kind == .video }.count
+        let images = files.filter { $0.kind == .image }.count
+        let csvs = files.filter { $0.kind == .csv }.count
+        let xlsxs = files.filter { $0.kind == .xlsx }.count
+        let presets = Engine.presets(
+            video: videos > 0, image: images > 0, csv: csvs > 0, xlsx: xlsxs > 0
+        )
 
-        if files.count == 1, let p = singleProbe {
+        if files.count == 1 {
+            let kind = files[0].kind
+            let subtitle: String
+            switch kind {
+            case .csv: subtitle = "CSV file"
+            case .xlsx: subtitle = "Excel spreadsheet"
+            default: subtitle = singleProbe.map(singleSummary) ?? ""
+            }
             return PresetInfo(
                 presets: presets,
                 title: URL(fileURLWithPath: files[0].path).lastPathComponent,
-                subtitle: singleSummary(p),
-                symbol: p.isImage ? "photo.fill" : "video.fill",
+                subtitle: subtitle,
+                symbol: symbol(for: kind),
                 count: 1
             )
         }
         var parts: [String] = []
         if videos > 0 { parts.append("\(videos) video\(videos == 1 ? "" : "s")") }
         if images > 0 { parts.append("\(images) image\(images == 1 ? "" : "s")") }
+        let sheets = csvs + xlsxs
+        if sheets > 0 { parts.append("\(sheets) spreadsheet\(sheets == 1 ? "" : "s")") }
         return PresetInfo(
             presets: presets,
             title: "\(files.count) files",
@@ -198,6 +222,14 @@ final class AppModel: ObservableObject {
             symbol: "square.stack.3d.up.fill",
             count: files.count
         )
+    }
+
+    private func symbol(for kind: FileKind) -> String {
+        switch kind {
+        case .video: return "video.fill"
+        case .image: return "photo.fill"
+        case .csv, .xlsx: return "tablecells.fill"
+        }
     }
 
     private func singleSummary(_ p: Probe) -> String {
@@ -211,8 +243,16 @@ final class AppModel: ObservableObject {
     // MARK: run (sequential batch)
 
     func run(opId: UInt32, label: String, params: AdvancedParams = AdvancedParams()) {
-        let targetImage = opId >= 10
-        let queue = files.filter { $0.isImage == targetImage }
+        // Which files this op applies to (others in a mixed batch are skipped).
+        let applies: (MediaFile) -> Bool
+        switch opId {
+        case 0...3: applies = { $0.kind == .video }
+        case 10...12: applies = { $0.kind == .image }
+        case 20: applies = { $0.kind == .csv } // CSV → XLSX
+        case 21: applies = { $0.kind == .xlsx } // XLSX → CSV
+        default: applies = { _ in false }
+        }
+        let queue = files.filter(applies)
         let skipped = files.count - queue.count
         guard !queue.isEmpty else { return }
 

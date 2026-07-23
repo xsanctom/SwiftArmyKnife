@@ -22,6 +22,8 @@ enum Theme {
         case 10: return .teal // Image convert
         case 11: return .indigo // Image resize
         case 12: return .mint // Image compress
+        case 20: return .green // CSV → XLSX
+        case 21: return .cyan // XLSX → CSV
         default: return brand
         }
     }
@@ -35,6 +37,8 @@ enum Theme {
         case 10: return "photo"
         case 11: return "aspectratio"
         case 12: return "arrow.down.right.and.arrow.up.left"
+        case 20: return "tablecells"
+        case 21: return "doc.plaintext"
         default: return "wand.and.stars"
         }
     }

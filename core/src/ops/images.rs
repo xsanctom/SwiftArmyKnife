@@ -237,6 +237,7 @@ mod tests {
         ProbeResult {
             is_video: false,
             is_image: true,
+            is_sheet: false,
             duration_s: 0.0,
             width: 4000,
             height: 3000,

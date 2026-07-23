@@ -58,7 +58,11 @@ struct AdvancedSheet: View {
         case 10: imageConvertControls
         case 11: imageResizeControls
         case 12: imageCompressControls
-        default: EmptyView()
+        default:
+            Text("No adjustable options for this conversion.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

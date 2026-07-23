@@ -13,10 +13,11 @@ mod compress;
 mod convert;
 mod gif;
 mod images;
+mod sheets;
 
 /// Stable numeric ids — these cross the FFI boundary as `u32`, so the values
 /// must not change once the Swift side depends on them. Video ops are 0–3,
-/// image ops are 10–12 (kept in separate ranges so the category is obvious).
+/// image ops are 10–12, spreadsheet ops are 20–21.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpId {
     Convert = 0,
@@ -26,6 +27,8 @@ pub enum OpId {
     ImageConvert = 10,
     ImageResize = 11,
     ImageCompress = 12,
+    SheetToXlsx = 20,
+    SheetToCsv = 21,
 }
 
 impl OpId {
@@ -38,17 +41,20 @@ impl OpId {
             10 => Some(OpId::ImageConvert),
             11 => Some(OpId::ImageResize),
             12 => Some(OpId::ImageCompress),
+            20 => Some(OpId::SheetToXlsx),
+            21 => Some(OpId::SheetToCsv),
             _ => None,
         }
     }
 }
 
-/// Which external tool a stage invokes. Almost everything is ffmpeg; image ops
-/// use a sips stage to decode formats ffmpeg mishandles (tiled HEIC/HEIF/AVIF).
+/// Which external tool a stage invokes. Most are ffmpeg; image ops use sips to
+/// decode HEIC/HEIF/AVIF; spreadsheet ops use python3 (openpyxl).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Ffmpeg,
     Sips,
+    Python,
 }
 
 /// One tool invocation within an operation. Most ops are a single stage;
@@ -73,6 +79,13 @@ impl Stage {
     pub fn sips(args: Vec<String>, weight: f32) -> Stage {
         Stage {
             tool: Tool::Sips,
+            args,
+            weight,
+        }
+    }
+    pub fn python(args: Vec<String>, weight: f32) -> Stage {
+        Stage {
+            tool: Tool::Python,
             args,
             weight,
         }
@@ -191,6 +204,8 @@ pub fn op_for(id: OpId) -> Box<dyn Op> {
         OpId::ImageConvert => Box::new(images::ImageConvert),
         OpId::ImageResize => Box::new(images::ImageResize),
         OpId::ImageCompress => Box::new(images::ImageCompress),
+        OpId::SheetToXlsx => Box::new(sheets::SheetToXlsx),
+        OpId::SheetToCsv => Box::new(sheets::SheetToCsv),
     }
 }
 

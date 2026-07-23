@@ -16,6 +16,7 @@ mod ffi {
     struct ProbeInfo {
         is_video: bool,
         is_image: bool,
+        is_sheet: bool,
         duration_s: f64,
         width: u32,
         height: u32,
@@ -69,7 +70,7 @@ mod ffi {
         // Op ids of the preset menu for the probed file's kind, in display
         // order. (swift-bridge can't return a Vec of shared structs, so the UI
         // pairs these ids with op_label() to build its buttons.)
-        fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32>;
+        fn menu_op_ids(is_video: bool, is_image: bool, is_csv: bool, is_xlsx: bool) -> Vec<u32>;
 
         // Human-readable label for an op id (empty string if unknown).
         fn op_label(op_id: u32) -> String;
@@ -122,14 +123,16 @@ pub(crate) fn ffmpeg_bin() -> String {
 // ---- bridged functions -------------------------------------------------------
 
 fn probe_file(path: String) -> ffi::ProbeInfo {
-    // Obvious non-media (e.g. .csv, .zip) never spawn ffprobe.
-    if !probe::extension_maybe_media(&path) {
+    // Skip clearly-unrelated files (.zip, .txt). Media go to ffprobe;
+    // spreadsheets are recognised by extension inside probe().
+    if !probe::extension_maybe_media(&path) && !probe::extension_looks_like_sheet(&path) {
         return none_info();
     }
     let p = probe::probe(&ffprobe_bin(), &path);
     ffi::ProbeInfo {
         is_video: p.is_video,
         is_image: p.is_image,
+        is_sheet: p.is_sheet,
         duration_s: p.duration_s,
         width: p.width,
         height: p.height,
@@ -143,6 +146,7 @@ fn none_info() -> ffi::ProbeInfo {
     ffi::ProbeInfo {
         is_video: false,
         is_image: false,
+        is_sheet: false,
         duration_s: 0.0,
         width: 0,
         height: 0,
@@ -154,25 +158,28 @@ fn none_info() -> ffi::ProbeInfo {
 
 fn classify_path(path: String) -> u32 {
     // Extension-only (fast, no ffprobe) — used to categorise a batch drop.
-    if std::path::Path::new(&path).extension().is_none() {
-        return 0;
-    }
-    if probe::extension_looks_like_image(&path) {
-        2
-    } else if probe::extension_looks_like_video(&path) {
-        1
-    } else {
-        0
+    // 0 = none, 1 = video, 2 = image, 3 = csv, 4 = xlsx.
+    let ext = std::path::Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("csv") => 3,
+        Some("xlsx") => 4,
+        Some(_) if probe::extension_looks_like_image(&path) => 2,
+        Some(_) if probe::extension_looks_like_video(&path) => 1,
+        _ => 0,
     }
 }
 
-fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32> {
+fn menu_op_ids(is_video: bool, is_image: bool, is_csv: bool, is_xlsx: bool) -> Vec<u32> {
     // Union of the applicable ops for the kinds present. A same-kind batch
-    // yields just that kind's ops; a mixed batch yields both sets.
+    // yields just that kind's ops; a mixed batch yields the union.
     let mut ids = Vec::new();
     let filler = |video: bool, image: bool| probe::ProbeResult {
         is_video: video,
         is_image: image,
+        is_sheet: false,
         duration_s: 0.0,
         width: 0,
         height: 0,
@@ -185,6 +192,12 @@ fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32> {
     }
     if is_image {
         ids.extend(menu_for(&filler(false, true)).into_iter().map(|m| m.op_id));
+    }
+    if is_csv {
+        ids.push(OpId::SheetToXlsx as u32);
+    }
+    if is_xlsx {
+        ids.push(OpId::SheetToCsv as u32);
     }
     ids
 }

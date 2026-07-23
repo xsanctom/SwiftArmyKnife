@@ -26,12 +26,12 @@ struct DropZoneView: View {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 46, weight: .regular))
                         .foregroundStyle(active ? Theme.brand : Color.secondary)
-                    Text(active ? "Drop to load" : "Drop a video or image")
+                    Text(active ? "Drop to load" : "Drop files or a folder")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(active ? Theme.brand : .primary)
                     // Kept present (just invisible when active) so the icon and
                     // title stay pinned in exactly the same spot.
-                    Text("Convert · Compress · Resize · Audio · GIF")
+                    Text("Video · Image · Spreadsheet")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .opacity(active ? 0 : 1)
@@ -106,7 +106,7 @@ struct UnsupportedView: View {
             systemImage: "questionmark.folder",
             tint: .gray,
             title: "Unsupported file",
-            subtitle: "Drop a video (mp4, mov, webm…) or an image (png, jpg, webp…)."
+            subtitle: "Drop a video (mp4, mov…), image (png, jpg, heic…), or spreadsheet (csv, xlsx)."
         ) {
             Button("Back") { model.reset() }.buttonStyle(.bordered)
         }
