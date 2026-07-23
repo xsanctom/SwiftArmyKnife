@@ -1,0 +1,20 @@
+[package]
+name = "swiss_army_knife_core"
+version = "0.1.0"
+edition = "2021"
+description = "Media engine for the Swiss Army Knife macOS app"
+
+[lib]
+# rlib so `cargo test` works; staticlib so the Swift app can link it (M2).
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+swift-bridge = "0.1"
+
+[build-dependencies]
+swift-bridge-build = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
