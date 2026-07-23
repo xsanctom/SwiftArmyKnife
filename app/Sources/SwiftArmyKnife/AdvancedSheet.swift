@@ -55,6 +55,9 @@ struct AdvancedSheet: View {
         case 1: compressControls
         case 2: audioControls
         case 3: gifControls
+        case 10: imageConvertControls
+        case 11: imageResizeControls
+        case 12: imageCompressControls
         default: EmptyView()
         }
     }
@@ -125,10 +128,51 @@ struct AdvancedSheet: View {
         }
     }
 
+    // MARK: image controls
+
+    private var imageConvertControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            labeledPicker("Format", selection: $params.imageFormat) {
+                Text("JPG").tag(UInt32(0))
+                Text("PNG").tag(UInt32(1))
+                Text("WebP").tag(UInt32(2))
+            }
+            if params.imageFormat != 1 { // PNG is lossless — no quality knob
+                sliderRow("Quality", value: imageQualityBinding, range: 1...100,
+                          display: "\(params.imageQuality)")
+            }
+        }
+    }
+
+    private var imageResizeControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Max size (longest side)", selection: $params.imageMaxDim) {
+                Text("3840 px").tag(UInt32(3840))
+                Text("1920 px").tag(UInt32(1920))
+                Text("1280 px").tag(UInt32(1280))
+                Text("1024 px").tag(UInt32(1024))
+                Text("800 px").tag(UInt32(800))
+            }
+        }
+    }
+
+    private var imageCompressControls: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sliderRow("Quality", value: imageQualityBinding, range: 1...100,
+                      display: "\(params.imageQuality)")
+            Text("Keeps the original format. PNG stays lossless.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: helpers
 
     private var crfBinding: Binding<Double> {
         Binding(get: { Double(params.crf) }, set: { params.crf = UInt32($0.rounded()) })
+    }
+
+    private var imageQualityBinding: Binding<Double> {
+        Binding(get: { Double(params.imageQuality) }, set: { params.imageQuality = UInt32($0.rounded()) })
     }
 
     private func labeledPicker<Content: View>(

@@ -19,6 +19,9 @@ enum Theme {
         case 1: return .purple // Compress
         case 2: return .pink // Extract audio
         case 3: return .orange // GIF
+        case 10: return .teal // Image convert
+        case 11: return .indigo // Image resize
+        case 12: return .mint // Image compress
         default: return brand
         }
     }
@@ -29,6 +32,9 @@ enum Theme {
         case 1: return "arrow.down.right.and.arrow.up.left"
         case 2: return "waveform"
         case 3: return "photo.stack"
+        case 10: return "photo"
+        case 11: return "aspectratio"
+        case 12: return "arrow.down.right.and.arrow.up.left"
         default: return "wand.and.stars"
         }
     }

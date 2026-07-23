@@ -5,12 +5,15 @@ import Foundation
 
 struct Probe {
     var isVideo: Bool
+    var isImage: Bool
     var duration: Double
     var width: Int
     var height: Int
     var hasAudio: Bool
     var videoCodec: String
     var audioCodec: String
+
+    var isMedia: Bool { isVideo || isImage }
 }
 
 struct Preset: Identifiable, Hashable {
@@ -35,6 +38,9 @@ struct AdvancedParams {
     var audioBitrateK: UInt32 = 192
     var gifFps: UInt32 = 12
     var gifWidth: UInt32 = 480
+    var imageFormat: UInt32 = 0 // 0 jpg, 1 png, 2 webp
+    var imageQuality: UInt32 = 80
+    var imageMaxDim: UInt32 = 1920
 
     func toFFI() -> JobParamsFFI {
         JobParamsFFI(
@@ -47,7 +53,10 @@ struct AdvancedParams {
             audio_format: audioFormat,
             audio_bitrate_k: audioBitrateK,
             gif_fps: gifFps,
-            gif_width: gifWidth
+            gif_width: gifWidth,
+            image_format: imageFormat,
+            image_quality: imageQuality,
+            image_max_dim: imageMaxDim
         )
     }
 }
@@ -86,6 +95,7 @@ enum Engine {
         let info = probe_file(path)
         return Probe(
             isVideo: info.is_video,
+            isImage: info.is_image,
             duration: info.duration_s,
             width: Int(info.width),
             height: Int(info.height),
@@ -95,9 +105,10 @@ enum Engine {
         )
     }
 
-    static func presets() -> [Preset] {
+    /// The preset menu for a probed file's kind (video ops vs image ops).
+    static func presets(for probe: Probe) -> [Preset] {
         var result: [Preset] = []
-        for id in menu_op_ids() {
+        for id in menu_op_ids(probe.isVideo, probe.isImage) {
             result.append(Preset(id: id, label: op_label(id).toString()))
         }
         return result

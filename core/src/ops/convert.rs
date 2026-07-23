@@ -73,7 +73,7 @@ impl Op for Convert {
     fn output_suffix(&self, _params: &JobParams) -> String {
         String::new()
     }
-    fn output_ext(&self, _params: &JobParams) -> String {
+    fn output_ext(&self, _input: &str, _params: &JobParams) -> String {
         "mp4".into()
     }
 
@@ -107,12 +107,17 @@ mod tests {
     fn probe_with_audio(has_audio: bool) -> ProbeResult {
         ProbeResult {
             is_video: true,
+            is_image: false,
             duration_s: 10.0,
             width: 1920,
             height: 1080,
             video_codec: "vp9".into(),
             has_audio,
-            audio_codec: if has_audio { "opus".into() } else { String::new() },
+            audio_codec: if has_audio {
+                "opus".into()
+            } else {
+                String::new()
+            },
         }
     }
 

@@ -74,7 +74,12 @@ mod tests {
 
     #[test]
     fn adds_suffix() {
-        let out = output_path_with(Path::new("/vids/clip.mov"), "compressed", "mp4", &taken(&[]));
+        let out = output_path_with(
+            Path::new("/vids/clip.mov"),
+            "compressed",
+            "mp4",
+            &taken(&[]),
+        );
         assert_eq!(out, PathBuf::from("/vids/clip-compressed.mp4"));
     }
 

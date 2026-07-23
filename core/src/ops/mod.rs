@@ -12,15 +12,20 @@ mod audio;
 mod compress;
 mod convert;
 mod gif;
+mod images;
 
 /// Stable numeric ids — these cross the FFI boundary as `u32`, so the values
-/// must not change once the Swift side depends on them.
+/// must not change once the Swift side depends on them. Video ops are 0–3,
+/// image ops are 10–12 (kept in separate ranges so the category is obvious).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpId {
     Convert = 0,
     Compress = 1,
     ExtractAudio = 2,
     Gif = 3,
+    ImageConvert = 10,
+    ImageResize = 11,
+    ImageCompress = 12,
 }
 
 impl OpId {
@@ -30,6 +35,9 @@ impl OpId {
             1 => Some(OpId::Compress),
             2 => Some(OpId::ExtractAudio),
             3 => Some(OpId::Gif),
+            10 => Some(OpId::ImageConvert),
+            11 => Some(OpId::ImageResize),
+            12 => Some(OpId::ImageCompress),
             _ => None,
         }
     }
@@ -65,6 +73,23 @@ pub enum AudioFormat {
     M4a,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    Jpg,
+    Png,
+    Webp,
+}
+
+impl ImageFormat {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ImageFormat::Jpg => "jpg",
+            ImageFormat::Png => "png",
+            ImageFormat::Webp => "webp",
+        }
+    }
+}
+
 /// All advanced knobs across all ops in one struct. Each op reads only the
 /// fields it cares about; the defaults are the one-tap preset behaviour.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,6 +108,10 @@ pub struct JobParams {
     // GIF
     pub gif_fps: u32,
     pub gif_width: u32,
+    // Images
+    pub image_format: ImageFormat,
+    pub image_quality: u32, // 1–100 (jpg/webp)
+    pub image_max_dim: u32, // longest side, px (resize)
 }
 
 impl Default for JobParams {
@@ -98,6 +127,9 @@ impl Default for JobParams {
             audio_bitrate_k: 192,
             gif_fps: 12,
             gif_width: 480,
+            image_format: ImageFormat::Jpg,
+            image_quality: 80,
+            image_max_dim: 1920,
         }
     }
 }
@@ -108,8 +140,9 @@ pub trait Op {
     fn label(&self) -> &'static str;
     /// Suffix added to the output filename stem (may be empty).
     fn output_suffix(&self, params: &JobParams) -> String;
-    /// Output extension without the dot (may depend on params, e.g. audio).
-    fn output_ext(&self, params: &JobParams) -> String;
+    /// Output extension without the dot. Takes the input path since some ops
+    /// (image resize/compress) keep the source's extension.
+    fn output_ext(&self, input: &str, params: &JobParams) -> String;
     /// Build the ordered ffmpeg invocations. `workdir` is a scratch dir the op
     /// may use for intermediate files (palette, two-pass log).
     fn build_stages(
@@ -129,7 +162,19 @@ pub fn op_for(id: OpId) -> Box<dyn Op> {
         OpId::Compress => Box::new(compress::Compress),
         OpId::ExtractAudio => Box::new(audio::ExtractAudio),
         OpId::Gif => Box::new(gif::Gif),
+        OpId::ImageConvert => Box::new(images::ImageConvert),
+        OpId::ImageResize => Box::new(images::ImageResize),
+        OpId::ImageCompress => Box::new(images::ImageCompress),
     }
+}
+
+/// Lowercased extension of a path (no dot), or empty string.
+pub(crate) fn ext_of(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 /// Common leading args for every ffmpeg invocation: quiet banner, overwrite
@@ -147,9 +192,5 @@ fn base_args(input: &str) -> Vec<String> {
 
 /// Progress reporting flags appended to a stage that writes real output.
 fn progress_args() -> Vec<String> {
-    vec![
-        "-progress".into(),
-        "pipe:1".into(),
-        "-nostats".into(),
-    ]
+    vec!["-progress".into(), "pipe:1".into(), "-nostats".into()]
 }

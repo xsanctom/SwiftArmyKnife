@@ -158,15 +158,29 @@ mod tests {
         // generated fast (ultrafast), but 60s at 720p takes real time to re-encode.
         let gen = std::process::Command::new("ffmpeg")
             .args([
-                "-hide_banner", "-y",
-                "-f", "lavfi", "-i", "testsrc=duration=60:size=1280x720:rate=30",
-                "-c:v", "libx264", "-preset", "ultrafast", &input_str,
+                "-hide_banner",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=60:size=1280x720:rate=30",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                &input_str,
             ])
             .output()
             .unwrap();
         assert!(gen.status.success(), "generation failed");
 
-        let id = start("ffmpeg".into(), "ffprobe".into(), input_str.clone(), 0, JobParams::default());
+        let id = start(
+            "ffmpeg".into(),
+            "ffprobe".into(),
+            input_str.clone(),
+            0,
+            JobParams::default(),
+        );
 
         // Wait for the job to actually start producing progress, then cancel.
         let started = Instant::now();
@@ -175,7 +189,10 @@ mod tests {
             if s.pct > 0.0 || s.status != STATUS_RUNNING {
                 break;
             }
-            assert!(started.elapsed() < Duration::from_secs(30), "job never started");
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "job never started"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         cancel(id);
@@ -185,10 +202,17 @@ mod tests {
         loop {
             let s = poll(id);
             if s.status != STATUS_RUNNING {
-                assert_eq!(s.status, STATUS_CANCELLED, "expected cancelled, got {}", s.status);
+                assert_eq!(
+                    s.status, STATUS_CANCELLED,
+                    "expected cancelled, got {}",
+                    s.status
+                );
                 break;
             }
-            assert!(cancelled_at.elapsed() < Duration::from_secs(15), "cancel didn't take effect");
+            assert!(
+                cancelled_at.elapsed() < Duration::from_secs(15),
+                "cancel didn't take effect"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
 
@@ -199,7 +223,10 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("mp4"))
             .filter(|e| e.path() != input)
             .collect();
-        assert!(leftover.is_empty(), "partial output not removed: {leftover:?}");
+        assert!(
+            leftover.is_empty(),
+            "partial output not removed: {leftover:?}"
+        );
 
         release(id);
     }

@@ -25,10 +25,22 @@ fn main() {
     };
 
     let cancel = AtomicBool::new(false);
-    let result = run_job_blocking("ffmpeg", file, op_id, &JobParams::default(), &p, &cancel, |pr| {
-        print!("\rprogress: {:>3.0}%  eta {:>4.1}s   ", pr.pct * 100.0, pr.eta_s);
-        std::io::stdout().flush().ok();
-    });
+    let result = run_job_blocking(
+        "ffmpeg",
+        file,
+        op_id,
+        &JobParams::default(),
+        &p,
+        &cancel,
+        |pr| {
+            print!(
+                "\rprogress: {:>3.0}%  eta {:>4.1}s   ",
+                pr.pct * 100.0,
+                pr.eta_s
+            );
+            std::io::stdout().flush().ok();
+        },
+    );
     match result {
         Ok(out) => println!("\noutput  : {}", out.display()),
         Err(e) => {

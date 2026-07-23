@@ -59,6 +59,9 @@ final class AppModel: ObservableObject {
             case "--abitrate": if let n = next.flatMap({ UInt32($0) }) { autorunParams.audioBitrateK = n; i += 1 }
             case "--giffps": if let n = next.flatMap({ UInt32($0) }) { autorunParams.gifFps = n; i += 1 }
             case "--gifw": if let n = next.flatMap({ UInt32($0) }) { autorunParams.gifWidth = n; i += 1 }
+            case "--imgfmt": if let n = next.flatMap({ UInt32($0) }) { autorunParams.imageFormat = n; i += 1 }
+            case "--imgq": if let n = next.flatMap({ UInt32($0) }) { autorunParams.imageQuality = n; i += 1 }
+            case "--imgmax": if let n = next.flatMap({ UInt32($0) }) { autorunParams.imageMaxDim = n; i += 1 }
             default: break
             }
             i += 1
@@ -94,13 +97,13 @@ final class AppModel: ObservableObject {
         // Main-actor Task; the blocking FFI call hops to a detached task.
         Task {
             let probe = await Task.detached { Engine.probe(path) }.value
-            if probe.isVideo {
+            if probe.isMedia {
                 lastProbe = probe
-                stage = .presets(probe, Engine.presets())
+                stage = .presets(probe, Engine.presets(for: probe))
                 if let op = autorunOpId { run(opId: op, label: "auto", params: autorunParams) }
             } else {
                 stage = .unsupported
-                finishAutorun(ok: false, detail: "not a video")
+                finishAutorun(ok: false, detail: "unsupported file")
             }
         }
     }
@@ -158,7 +161,7 @@ final class AppModel: ObservableObject {
         case .cancelled:
             finishJob()
             if let probe = lastProbe {
-                stage = .presets(probe, Engine.presets())
+                stage = .presets(probe, Engine.presets(for: probe))
             } else {
                 stage = .drop
             }

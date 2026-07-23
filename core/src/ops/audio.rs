@@ -16,7 +16,7 @@ impl Op for ExtractAudio {
     fn output_suffix(&self, _params: &JobParams) -> String {
         String::new()
     }
-    fn output_ext(&self, params: &JobParams) -> String {
+    fn output_ext(&self, _input: &str, params: &JobParams) -> String {
         match params.audio_format {
             AudioFormat::Mp3 => "mp3".into(),
             AudioFormat::M4a => "m4a".into(),
@@ -55,6 +55,7 @@ mod tests {
     fn probe() -> ProbeResult {
         ProbeResult {
             is_video: true,
+            is_image: false,
             duration_s: 30.0,
             width: 1280,
             height: 720,
@@ -77,7 +78,10 @@ mod tests {
         assert!(a.contains(&"-vn".to_string()));
         assert!(a.windows(2).any(|w| w == ["-c:a", "libmp3lame"]));
         assert!(a.windows(2).any(|w| w == ["-b:a", "192k"]));
-        assert_eq!(ExtractAudio.output_ext(&JobParams::default()), "mp3");
+        assert_eq!(
+            ExtractAudio.output_ext("in.mp4", &JobParams::default()),
+            "mp3"
+        );
     }
 
     #[test]
@@ -92,6 +96,6 @@ mod tests {
         let a = &stages[0].args;
         assert!(a.windows(2).any(|w| w == ["-c:a", "aac"]));
         assert!(a.windows(2).any(|w| w == ["-b:a", "256k"]));
-        assert_eq!(ExtractAudio.output_ext(&params), "m4a");
+        assert_eq!(ExtractAudio.output_ext("in.m4a", &params), "m4a");
     }
 }

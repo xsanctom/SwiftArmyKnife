@@ -25,14 +25,17 @@ pub struct MenuItem {
     pub label: String,
 }
 
-/// Which operations apply to a probed file. For v1 every video supports all
-/// four; a non-video yields an empty menu (the UI shows the "video only" state).
+/// Which operations apply to a probed file: the video ops for a video, the
+/// image ops for a still, or an empty menu for anything else.
 pub fn menu_for(probe: &ProbeResult) -> Vec<MenuItem> {
-    if !probe.is_video {
-        return Vec::new();
-    }
-    [OpId::Convert, OpId::Compress, OpId::ExtractAudio, OpId::Gif]
-        .iter()
+    let ids: &[OpId] = if probe.is_video {
+        &[OpId::Convert, OpId::Compress, OpId::ExtractAudio, OpId::Gif]
+    } else if probe.is_image {
+        &[OpId::ImageConvert, OpId::ImageResize, OpId::ImageCompress]
+    } else {
+        &[]
+    };
+    ids.iter()
         .map(|&id| {
             let op = op_for(id);
             MenuItem {
@@ -51,7 +54,7 @@ pub fn plan_output(input: &str, op_id: u32, params: &JobParams) -> Result<PathBu
     Ok(output::output_path(
         Path::new(input),
         &op.output_suffix(params),
-        &op.output_ext(params),
+        &op.output_ext(input, params),
     ))
 }
 
@@ -85,7 +88,7 @@ pub fn run_job_blocking(
     let output = output::output_path(
         Path::new(input),
         &op.output_suffix(params),
-        &op.output_ext(params),
+        &op.output_ext(input, params),
     );
     let output_str = output.to_string_lossy().into_owned();
 
@@ -115,6 +118,7 @@ mod tests {
     fn menu_empty_for_non_video() {
         assert!(menu_for(&ProbeResult {
             is_video: false,
+            is_image: false,
             duration_s: 0.0,
             width: 0,
             height: 0,
@@ -134,8 +138,12 @@ mod tests {
 
     #[test]
     fn plan_output_uses_correct_extension() {
-        let out = plan_output("/v/clip.webm", OpId::ExtractAudio as u32, &JobParams::default())
-            .unwrap();
+        let out = plan_output(
+            "/v/clip.webm",
+            OpId::ExtractAudio as u32,
+            &JobParams::default(),
+        )
+        .unwrap();
         assert_eq!(out.extension().unwrap(), "mp3");
         let bad = plan_output("/v/clip.webm", 99, &JobParams::default());
         assert!(bad.is_err());
@@ -144,6 +152,7 @@ mod tests {
     fn video_probe() -> ProbeResult {
         ProbeResult {
             is_video: true,
+            is_image: false,
             duration_s: 2.0,
             width: 320,
             height: 240,
@@ -217,25 +226,25 @@ mod tests {
         ] {
             let mut last_pct = 0.0f32;
             let params = if op_id == OpId::Compress as u32 {
-                JobParams { target_mb: 1.0, ..Default::default() }
+                JobParams {
+                    target_mb: 1.0,
+                    ..Default::default()
+                }
             } else {
                 JobParams::default()
             };
-            let out = run_job_blocking(
-                "ffmpeg",
-                &input_str,
-                op_id,
-                &params,
-                &p,
-                &cancel,
-                |pr| last_pct = pr.pct,
-            )
+            let out = run_job_blocking("ffmpeg", &input_str, op_id, &params, &p, &cancel, |pr| {
+                last_pct = pr.pct
+            })
             .unwrap_or_else(|e| panic!("op {op_id} failed: {e}"));
 
             let meta = std::fs::metadata(&out)
                 .unwrap_or_else(|_| panic!("op {op_id} produced no output at {out:?}"));
             assert!(meta.len() > 0, "op {op_id} produced empty output");
-            assert!((last_pct - 1.0).abs() < 1e-3, "op {op_id} didn't reach 100%");
+            assert!(
+                (last_pct - 1.0).abs() < 1e-3,
+                "op {op_id} didn't reach 100%"
+            );
         }
     }
 }

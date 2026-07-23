@@ -11,9 +11,10 @@ use std::process::Command;
 /// What we learn about a dropped file. Everything the UI and the ops need.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeResult {
-    /// True if there is at least one *real* video stream (cover-art / attached
-    /// pictures don't count — an mp3 with album art is not a video).
+    /// A *moving* picture: a real (non-cover-art) video stream with a duration.
     pub is_video: bool,
+    /// A *still* image: a video stream with no duration (png/jpg/webp/heic…).
+    pub is_image: bool,
     pub duration_s: f64,
     pub width: u32,
     pub height: u32,
@@ -23,9 +24,11 @@ pub struct ProbeResult {
 }
 
 impl ProbeResult {
-    fn not_video() -> Self {
+    /// Nothing we can work with (audio-only, document, unreadable, …).
+    fn none() -> Self {
         ProbeResult {
             is_video: false,
+            is_image: false,
             duration_s: 0.0,
             width: 0,
             height: 0,
@@ -44,8 +47,28 @@ pub fn extension_looks_like_video(path: &str) -> bool {
         "mp4", "mov", "m4v", "webm", "mkv", "avi", "flv", "wmv", "mpg", "mpeg", "ts", "m2ts",
         "3gp", "ogv",
     ];
+    ext_matches(path, VIDEO_EXTS)
+}
+
+pub fn extension_looks_like_image(path: &str) -> bool {
+    const IMAGE_EXTS: &[&str] = &[
+        "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "tiff", "tif", "tga",
+    ];
+    ext_matches(path, IMAGE_EXTS)
+}
+
+/// Worth spawning ffprobe? Video or image extension, or no extension at all.
+/// A clearly-unrelated extension (.csv, .zip, …) is rejected without a probe.
+pub fn extension_maybe_media(path: &str) -> bool {
+    match Path::new(path).extension() {
+        None => true, // no extension → let ffprobe decide
+        Some(_) => extension_looks_like_video(path) || extension_looks_like_image(path),
+    }
+}
+
+fn ext_matches(path: &str, exts: &[&str]) -> bool {
     match Path::new(path).extension().and_then(|e| e.to_str()) {
-        Some(ext) => VIDEO_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
+        Some(ext) => exts.contains(&ext.to_ascii_lowercase().as_str()),
         None => true, // no extension → let ffprobe decide (don't reject)
     }
 }
@@ -72,7 +95,7 @@ pub fn probe(ffprobe_bin: &str, path: &str) -> ProbeResult {
             let json = String::from_utf8_lossy(&out.stdout);
             parse_probe_json(&json)
         }
-        _ => ProbeResult::not_video(),
+        _ => ProbeResult::none(),
     }
 }
 
@@ -118,20 +141,18 @@ struct Format {
 pub fn parse_probe_json(json: &str) -> ProbeResult {
     let parsed: FfprobeOutput = match serde_json::from_str(json) {
         Ok(p) => p,
-        Err(_) => return ProbeResult::not_video(),
+        Err(_) => return ProbeResult::none(),
     };
 
-    // A genuine video stream: codec_type == "video" and NOT an attached picture.
+    // A genuine picture stream: codec_type == "video" and NOT an attached
+    // picture (album art). Covers both moving video and still images.
     let video_stream = parsed.streams.iter().find(|s| {
-        s.codec_type == "video"
-            && s.disposition.as_ref().map(|d| d.attached_pic).unwrap_or(0) == 0
+        s.codec_type == "video" && s.disposition.as_ref().map(|d| d.attached_pic).unwrap_or(0) == 0
     });
 
-    let is_video = video_stream.is_some();
-    if !is_video {
-        return ProbeResult::not_video();
-    }
-    let vs = video_stream.unwrap();
+    let Some(vs) = video_stream else {
+        return ProbeResult::none();
+    };
 
     let audio_stream = parsed.streams.iter().find(|s| s.codec_type == "audio");
 
@@ -144,8 +165,13 @@ pub fn parse_probe_json(json: &str) -> ProbeResult {
         .or_else(|| vs.duration.as_ref().and_then(|d| d.parse::<f64>().ok()))
         .unwrap_or(0.0);
 
+    // With a real picture stream: a duration means video; no duration means a
+    // still image (png/jpg/webp/heic all report no duration).
+    let is_video = duration_s > 0.0;
+
     ProbeResult {
-        is_video: true,
+        is_video,
+        is_image: !is_video,
         duration_s,
         width: vs.width.unwrap_or(0),
         height: vs.height.unwrap_or(0),
@@ -178,6 +204,43 @@ mod tests {
         assert!(r.has_audio);
         assert_eq!(r.audio_codec, "aac");
         assert!((r.duration_s - 12.52).abs() < 0.001);
+    }
+
+    #[test]
+    fn png_is_an_image_not_a_video() {
+        // A still image: a real video stream, but no duration.
+        let json = r#"{
+            "streams": [{"codec_type":"video","codec_name":"png","width":4000,"height":3000}],
+            "format": {"format_name":"png_pipe"}
+        }"#;
+        let r = parse_probe_json(json);
+        assert!(r.is_image);
+        assert!(!r.is_video);
+        assert_eq!(r.width, 4000);
+        assert_eq!(r.video_codec, "png");
+    }
+
+    #[test]
+    fn mp3_cover_art_is_neither_video_nor_image() {
+        let json = r#"{
+            "streams": [
+                {"codec_type":"audio","codec_name":"mp3"},
+                {"codec_type":"video","codec_name":"mjpeg","width":300,"height":300,"disposition":{"attached_pic":1}}
+            ]
+        }"#;
+        let r = parse_probe_json(json);
+        assert!(!r.is_video);
+        assert!(!r.is_image);
+    }
+
+    #[test]
+    fn image_extension_precheck() {
+        assert!(extension_looks_like_image("/x/photo.JPG"));
+        assert!(extension_looks_like_image("/x/art.webp"));
+        assert!(!extension_looks_like_image("/x/clip.mp4"));
+        assert!(extension_maybe_media("/x/photo.png"));
+        assert!(extension_maybe_media("/x/clip.mov"));
+        assert!(!extension_maybe_media("/x/data.csv"));
     }
 
     #[test]

@@ -158,7 +158,9 @@ pub fn run_stages(
             }
         }
 
-        let status = child.wait().map_err(|e| EngineError::Spawn(e.to_string()))?;
+        let status = child
+            .wait()
+            .map_err(|e| EngineError::Spawn(e.to_string()))?;
         let stderr_text = stderr_handle.join().unwrap_or_default();
         if !status.success() {
             // A cancel could race the exit; treat a killed child as cancelled.
@@ -178,7 +180,10 @@ pub fn run_stages(
         });
     }
 
-    on_progress(Progress { pct: 1.0, eta_s: 0.0 });
+    on_progress(Progress {
+        pct: 1.0,
+        eta_s: 0.0,
+    });
     Ok(())
 }
 
@@ -197,10 +202,7 @@ mod tests {
     #[test]
     fn parses_out_time_us() {
         assert_eq!(parse_progress_seconds("out_time_us=12500000"), Some(12.5));
-        assert_eq!(
-            parse_progress_seconds("  out_time_us=1000000 "),
-            Some(1.0)
-        );
+        assert_eq!(parse_progress_seconds("  out_time_us=1000000 "), Some(1.0));
     }
 
     #[test]
@@ -215,7 +217,10 @@ mod tests {
             parse_progress_seconds("out_time=00:00:12.340000"),
             Some(12.34)
         );
-        assert_eq!(parse_progress_seconds("out_time=00:01:00.000000"), Some(60.0));
+        assert_eq!(
+            parse_progress_seconds("out_time=00:01:00.000000"),
+            Some(60.0)
+        );
     }
 
     #[test]

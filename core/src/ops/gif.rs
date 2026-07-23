@@ -20,7 +20,7 @@ impl Op for Gif {
     fn output_suffix(&self, _params: &JobParams) -> String {
         String::new()
     }
-    fn output_ext(&self, _params: &JobParams) -> String {
+    fn output_ext(&self, _input: &str, _params: &JobParams) -> String {
         "gif".into()
     }
 
@@ -40,7 +40,9 @@ impl Op for Gif {
         let mut p1 = base_args(input);
         p1.extend(progress_args());
         p1.push("-vf".into());
-        p1.push(format!("fps={fps},scale={width}:-1:flags=lanczos,palettegen"));
+        p1.push(format!(
+            "fps={fps},scale={width}:-1:flags=lanczos,palettegen"
+        ));
         p1.push(palette.clone());
 
         // Stage 2: paletteuse (input + palette) → output.gif
@@ -56,8 +58,14 @@ impl Op for Gif {
         p2.push(output.into());
 
         vec![
-            Stage { args: p1, weight: 0.5 },
-            Stage { args: p2, weight: 0.5 },
+            Stage {
+                args: p1,
+                weight: 0.5,
+            },
+            Stage {
+                args: p2,
+                weight: 0.5,
+            },
         ]
     }
 }
@@ -69,6 +77,7 @@ mod tests {
     fn probe() -> ProbeResult {
         ProbeResult {
             is_video: true,
+            is_image: false,
             duration_s: 5.0,
             width: 1280,
             height: 720,

@@ -1,9 +1,14 @@
 # Swift Army Knife
 
-A tiny, native macOS app for quick video chores. Drop a video onto the window and
-pick what you want: **Convert to MP4 · Compress · Extract audio · Make GIF** — with
-a live progress bar, cancel, and an Advanced sheet for tuning. Output lands next to
-the source, suffixed, and never overwrites the original.
+A tiny, native macOS app for quick media chores. Drop a **video or image** onto the
+window and pick what you want:
+
+- **Video** — Convert to MP4 · Compress · Extract audio · Make GIF
+- **Image** — Convert (JPG/PNG/WebP) · Resize · Compress
+
+…with a live progress bar, cancel, and an Advanced sheet for tuning. Output lands
+next to the source, suffixed, and never overwrites the original. The menu adapts to
+whatever you drop — detection is content-based (ffprobe), not by extension.
 
 A SwiftUI shell over a Rust engine (via [swift-bridge](https://github.com/chinedufn/swift-bridge)),
 wrapping `ffmpeg`/`ffprobe`. Apple-silicon only.
@@ -47,7 +52,7 @@ cd core && cargo test
 The Rust core is fully testable headless — command building, output naming, progress
 parsing, cancellation, and an end-to-end pass against real ffmpeg.
 
-## v1 scope
+## Scope
 
-Video only. Batch/folder drop, image and PDF tools, and a bundled (notarized) ffmpeg
-are possible future additions.
+Video and image files. Batch/folder drop, audio-file and PDF tools, and a bundled
+(notarized) ffmpeg are possible future additions.

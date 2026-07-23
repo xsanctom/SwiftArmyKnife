@@ -37,7 +37,7 @@ impl Op for Compress {
     fn output_suffix(&self, _params: &JobParams) -> String {
         "compressed".into()
     }
-    fn output_ext(&self, _params: &JobParams) -> String {
+    fn output_ext(&self, _input: &str, _params: &JobParams) -> String {
         "mp4".into()
     }
 
@@ -126,8 +126,14 @@ impl Op for Compress {
                 p2.push(output.into());
 
                 vec![
-                    Stage { args: p1, weight: 0.5 },
-                    Stage { args: p2, weight: 0.5 },
+                    Stage {
+                        args: p1,
+                        weight: 0.5,
+                    },
+                    Stage {
+                        args: p2,
+                        weight: 0.5,
+                    },
                 ]
             }
         }
@@ -141,12 +147,17 @@ mod tests {
     fn probe(duration: f64, has_audio: bool) -> ProbeResult {
         ProbeResult {
             is_video: true,
+            is_image: false,
             duration_s: duration,
             width: 1920,
             height: 1080,
             video_codec: "h264".into(),
             has_audio,
-            audio_codec: if has_audio { "aac".into() } else { String::new() },
+            audio_codec: if has_audio {
+                "aac".into()
+            } else {
+                String::new()
+            },
         }
     }
 
@@ -181,10 +192,7 @@ mod tests {
         assert!(stages[0].args.contains(&"-an".to_string()));
         assert!(stages[0].args.contains(&"/dev/null".to_string()));
         // Both passes share one passlog under the workdir.
-        assert!(stages[0]
-            .args
-            .iter()
-            .any(|s| s == "/wd/passlog"));
+        assert!(stages[0].args.iter().any(|s| s == "/wd/passlog"));
         assert_eq!(stages[1].args.last().unwrap(), "out.mp4");
         assert!((stages[0].weight + stages[1].weight - 1.0).abs() < 1e-6);
     }

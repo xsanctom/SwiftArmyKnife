@@ -26,12 +26,12 @@ struct DropZoneView: View {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 46, weight: .regular))
                         .foregroundStyle(active ? Theme.brand : Color.secondary)
-                    Text(active ? "Drop to load" : "Drop a video")
+                    Text(active ? "Drop to load" : "Drop a video or image")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(active ? Theme.brand : .primary)
                     // Kept present (just invisible when active) so the icon and
                     // title stay pinned in exactly the same spot.
-                    Text("Convert · Compress · Extract audio · GIF")
+                    Text("Convert · Compress · Resize · Audio · GIF")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .opacity(active ? 0 : 1)
@@ -103,10 +103,10 @@ struct UnsupportedView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         StatusScaffold(
-            systemImage: "film.stack",
+            systemImage: "questionmark.folder",
             tint: .gray,
-            title: "Video files only for now",
-            subtitle: "Drop an .mp4, .mov, .webm, or .mkv."
+            title: "Unsupported file",
+            subtitle: "Drop a video (mp4, mov, webm…) or an image (png, jpg, webp…)."
         ) {
             Button("Back") { model.reset() }.buttonStyle(.bordered)
         }
@@ -125,7 +125,7 @@ struct PresetsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            FileHeader(name: fileName, detail: summary) { model.reset() }
+            FileHeader(name: fileName, detail: summary, symbol: probe.isImage ? "photo.fill" : "video.fill") { model.reset() }
 
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(presets) { preset in
@@ -171,11 +171,12 @@ struct PresetsView: View {
 struct FileHeader: View {
     let name: String
     let detail: String
+    var symbol: String = "video.fill"
     var onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "video.fill")
+            Image(systemName: symbol)
                 .foregroundStyle(Theme.brand)
                 .font(.body)
             VStack(alignment: .leading, spacing: 2) {

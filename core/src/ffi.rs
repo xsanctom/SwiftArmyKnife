@@ -5,7 +5,7 @@
 //! this in M3. Everything here delegates to the plain-Rust engine in the rest
 //! of the crate.
 
-use crate::ops::{op_for, AudioFormat, CompressMode, JobParams, OpId, VideoCodec};
+use crate::ops::{op_for, AudioFormat, CompressMode, ImageFormat, JobParams, OpId, VideoCodec};
 use crate::{menu_for, probe};
 use std::sync::OnceLock;
 
@@ -15,6 +15,7 @@ mod ffi {
     #[swift_bridge(swift_repr = "struct")]
     struct ProbeInfo {
         is_video: bool,
+        is_image: bool,
         duration_s: f64,
         width: u32,
         height: u32,
@@ -38,16 +39,19 @@ mod ffi {
     // max_height 0 means "keep original".
     #[swift_bridge(swift_repr = "struct")]
     struct JobParamsFFI {
-        video_codec: u32,   // 0 h264, 1 hevc
+        video_codec: u32, // 0 h264, 1 hevc
         crf: u32,
-        max_height: u32,    // 0 = original
+        max_height: u32, // 0 = original
         hw_accel: bool,
         compress_mode: u32, // 0 target-size, 1 crf
         target_mb: f64,
-        audio_format: u32,  // 0 mp3, 1 m4a
+        audio_format: u32, // 0 mp3, 1 m4a
         audio_bitrate_k: u32,
         gif_fps: u32,
         gif_width: u32,
+        image_format: u32,  // 0 jpg, 1 png, 2 webp
+        image_quality: u32, // 1–100
+        image_max_dim: u32, // longest side, px
     }
 
     extern "Rust" {
@@ -58,10 +62,10 @@ mod ffi {
         // Inspect a file. Runs a fast extension check, then ffprobe.
         fn probe_file(path: String) -> ProbeInfo;
 
-        // Op ids of the preset menu for a video, in display order.
-        // (swift-bridge can't return a Vec of shared structs, so the UI pairs
-        //  these ids with op_label() to build its buttons.)
-        fn menu_op_ids() -> Vec<u32>;
+        // Op ids of the preset menu for the probed file's kind, in display
+        // order. (swift-bridge can't return a Vec of shared structs, so the UI
+        // pairs these ids with op_label() to build its buttons.)
+        fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32>;
 
         // Human-readable label for an op id (empty string if unknown).
         fn op_label(op_id: u32) -> String;
@@ -114,13 +118,14 @@ pub(crate) fn ffmpeg_bin() -> String {
 // ---- bridged functions -------------------------------------------------------
 
 fn probe_file(path: String) -> ffi::ProbeInfo {
-    // Obvious non-videos (e.g. .png, .csv) never spawn ffprobe.
-    if !probe::extension_looks_like_video(&path) {
-        return not_video();
+    // Obvious non-media (e.g. .csv, .zip) never spawn ffprobe.
+    if !probe::extension_maybe_media(&path) {
+        return none_info();
     }
     let p = probe::probe(&ffprobe_bin(), &path);
     ffi::ProbeInfo {
         is_video: p.is_video,
+        is_image: p.is_image,
         duration_s: p.duration_s,
         width: p.width,
         height: p.height,
@@ -130,9 +135,10 @@ fn probe_file(path: String) -> ffi::ProbeInfo {
     }
 }
 
-fn not_video() -> ffi::ProbeInfo {
+fn none_info() -> ffi::ProbeInfo {
     ffi::ProbeInfo {
         is_video: false,
+        is_image: false,
         duration_s: 0.0,
         width: 0,
         height: 0,
@@ -142,11 +148,11 @@ fn not_video() -> ffi::ProbeInfo {
     }
 }
 
-fn menu_op_ids() -> Vec<u32> {
-    // The menu is the same set for any video; pass a minimal video probe to get
-    // the canonical ordered op ids from the registry.
-    let dummy = probe::ProbeResult {
-        is_video: true,
+fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32> {
+    // menu_for only reads the kind flags; the rest is filler.
+    let probe = probe::ProbeResult {
+        is_video,
+        is_image,
         duration_s: 0.0,
         width: 0,
         height: 0,
@@ -154,7 +160,7 @@ fn menu_op_ids() -> Vec<u32> {
         video_codec: String::new(),
         audio_codec: String::new(),
     };
-    menu_for(&dummy).into_iter().map(|m| m.op_id).collect()
+    menu_for(&probe).into_iter().map(|m| m.op_id).collect()
 }
 
 fn op_label(op_id: u32) -> String {
@@ -164,14 +170,28 @@ fn op_label(op_id: u32) -> String {
 }
 
 fn start_job(path: String, op_id: u32, params: ffi::JobParamsFFI) -> u64 {
-    crate::jobs::start(ffmpeg_bin(), ffprobe_bin(), path, op_id, to_job_params(params))
+    crate::jobs::start(
+        ffmpeg_bin(),
+        ffprobe_bin(),
+        path,
+        op_id,
+        to_job_params(params),
+    )
 }
 
 fn to_job_params(p: ffi::JobParamsFFI) -> JobParams {
     JobParams {
-        video_codec: if p.video_codec == 1 { VideoCodec::Hevc } else { VideoCodec::H264 },
+        video_codec: if p.video_codec == 1 {
+            VideoCodec::Hevc
+        } else {
+            VideoCodec::H264
+        },
         crf: p.crf.clamp(0, 51) as u8,
-        max_height: if p.max_height == 0 { None } else { Some(p.max_height) },
+        max_height: if p.max_height == 0 {
+            None
+        } else {
+            Some(p.max_height)
+        },
         hw_accel: p.hw_accel,
         compress_mode: if p.compress_mode == 1 {
             CompressMode::Crf
@@ -179,10 +199,21 @@ fn to_job_params(p: ffi::JobParamsFFI) -> JobParams {
             CompressMode::TargetSize
         },
         target_mb: p.target_mb,
-        audio_format: if p.audio_format == 1 { AudioFormat::M4a } else { AudioFormat::Mp3 },
+        audio_format: if p.audio_format == 1 {
+            AudioFormat::M4a
+        } else {
+            AudioFormat::Mp3
+        },
         audio_bitrate_k: p.audio_bitrate_k,
         gif_fps: p.gif_fps,
         gif_width: p.gif_width,
+        image_format: match p.image_format {
+            1 => ImageFormat::Png,
+            2 => ImageFormat::Webp,
+            _ => ImageFormat::Jpg,
+        },
+        image_quality: p.image_quality,
+        image_max_dim: p.image_max_dim,
     }
 }
 
