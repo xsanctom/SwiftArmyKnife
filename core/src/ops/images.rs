@@ -1,30 +1,69 @@
 //! Image operations: convert, resize, compress.
 //!
-//! Mostly ffmpeg-native (ffmpeg reads/writes stills). The exception is tiled
-//! HEIC/HEIF/AVIF, which ffmpeg decodes incorrectly (it returns a single tile —
-//! a small crop). For those we decode to a full-resolution PNG with macOS
-//! `sips` first, then run the normal ffmpeg op on that.
+//! macOS `sips` is the workhorse: it reads everything (incl. tiled HEIC, which
+//! ffmpeg mangles) and preserves EXIF orientation. ffmpeg is used only to write
+//! WebP (which sips can't) — and only from a JPEG source, because ffmpeg *bakes*
+//! JPEG EXIF orientation into its output (it ignores PNG orientation, which was
+//! the earlier rotation bug).
 
-use super::{base_args, ext_of, progress_args, JobParams, Op, OpId, Stage};
+use super::{base_args, ext_of, progress_args, ImageFormat, JobParams, Op, OpId, Stage};
 use crate::probe::ProbeResult;
 use std::path::Path;
 
-/// Formats ffmpeg mishandles — decode natively with sips first.
+/// Formats ffmpeg can't decode correctly — must go through sips.
 fn needs_native_decode(input: &str) -> bool {
     matches!(ext_of(input).as_str(), "heic" | "heif" | "avif")
 }
 
-/// If the input needs native decoding, returns a leading sips stage that writes
-/// a full-res PNG into `workdir`, plus the path the ffmpeg stage should read.
-/// Otherwise no extra stage and the original input.
-fn decode_prefix(input: &str, workdir: &Path) -> (Vec<Stage>, String) {
+/// sips's format name for an output extension.
+fn sips_format(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" => "jpeg",
+        "png" => "png",
+        "gif" => "gif",
+        "tif" | "tiff" => "tiff",
+        _ => "jpeg",
+    }
+}
+
+/// Output extension for ops that keep the source format. HEIC/HEIF/AVIF can't
+/// be re-written in place, so those become JPG.
+fn keep_ext(input: &str) -> String {
+    match ext_of(input).as_str() {
+        "" | "heic" | "heif" | "avif" => "jpg".into(),
+        other => other.to_string(),
+    }
+}
+
+/// A sips convert/compress stage: `-s format <fmt> [-s formatOptions <q>] in --out out`.
+fn sips_encode(input: &str, output: &str, ext: &str, quality: u32) -> Stage {
+    let mut args = vec!["-s".into(), "format".into(), sips_format(ext).into()];
+    if matches!(ext, "jpg" | "jpeg") {
+        args.extend([
+            "-s".into(),
+            "formatOptions".into(),
+            quality.clamp(1, 100).to_string(),
+        ]);
+    }
+    args.push(input.into());
+    args.extend(["--out".into(), output.into()]);
+    Stage::sips(args, 1.0)
+}
+
+/// For the WebP path (ffmpeg only): if the source is HEIC, decode it to a
+/// JPEG in `workdir` (orientation preserved as an EXIF tag ffmpeg will bake);
+/// otherwise ffmpeg reads the source directly.
+fn webp_source(input: &str, workdir: &Path) -> (Vec<Stage>, String) {
     if needs_native_decode(input) {
-        let decoded = workdir.join("decoded.png").to_string_lossy().into_owned();
+        let decoded = workdir.join("decoded.jpg").to_string_lossy().into_owned();
         let sips = Stage::sips(
             vec![
                 "-s".into(),
                 "format".into(),
-                "png".into(),
+                "jpeg".into(),
+                "-s".into(),
+                "formatOptions".into(),
+                "100".into(),
                 input.into(),
                 "--out".into(),
                 decoded.clone(),
@@ -37,44 +76,28 @@ fn decode_prefix(input: &str, workdir: &Path) -> (Vec<Stage>, String) {
     }
 }
 
-/// Map a 1–100 quality to an mjpeg `-q:v` qscale (2 = best … 31 = worst).
-fn jpg_qscale(quality: u32) -> String {
-    let q = quality.clamp(1, 100) as f64;
-    let scale = 2.0 + (100.0 - q) * 29.0 / 100.0;
-    ((scale.round() as u32).clamp(2, 31)).to_string()
+fn webp_args(ff_input: &str, output: &str, quality: u32, extra_vf: Option<String>) -> Vec<String> {
+    let mut args = base_args(ff_input);
+    args.extend(progress_args());
+    if let Some(vf) = extra_vf {
+        args.push("-vf".into());
+        args.push(vf);
+    }
+    args.extend([
+        "-c:v".into(),
+        "libwebp".into(),
+        "-quality".into(),
+        quality.clamp(1, 100).to_string(),
+        "-frames:v".into(),
+        "1".into(),
+    ]);
+    args.push(output.into());
+    args
 }
 
-/// Append the encoder args for a given output extension + quality.
-fn encode_args(out_ext: &str, quality: u32, args: &mut Vec<String>) {
-    match out_ext {
-        "jpg" | "jpeg" => args.extend(["-q:v".into(), jpg_qscale(quality)]),
-        "webp" => args.extend([
-            "-c:v".into(),
-            "libwebp".into(),
-            "-quality".into(),
-            quality.clamp(1, 100).to_string(),
-        ]),
-        _ => {} // png / other: lossless, nothing to tune
-    }
-}
-
-/// Output extension for ops that keep the source format. HEIC/HEIF/AVIF can't
-/// be written by ffmpeg, so those become JPG.
-fn keep_ext(input: &str) -> String {
-    match ext_of(input).as_str() {
-        "" => "jpg".into(),
-        "heic" | "heif" | "avif" => "jpg".into(),
-        other => other.to_string(),
-    }
-}
-
-/// Weight for the final ffmpeg stage given whether a decode stage precedes it.
-fn ff_weight(prefix: &[Stage]) -> f32 {
-    if prefix.is_empty() {
-        1.0
-    } else {
-        0.6
-    }
+/// Downscale to fit within `max`×`max`, preserving aspect and never upscaling.
+fn scale_filter(max: u32) -> String {
+    format!("scale=min({max}\\,iw):min({max}\\,ih):force_original_aspect_ratio=decrease")
 }
 
 // MARK: Convert
@@ -103,27 +126,25 @@ impl Op for ImageConvert {
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
-        let out_ext = params.image_format.ext();
-        let (mut stages, ff_input) = decode_prefix(input, workdir);
-        let mut args = base_args(&ff_input);
-        args.extend(progress_args());
-        encode_args(out_ext, params.image_quality, &mut args);
-        args.extend(["-frames:v".into(), "1".into()]);
-        args.push(output.into());
-        let w = ff_weight(&stages);
-        stages.push(Stage::ffmpeg(args, w));
-        stages
+        match params.image_format {
+            ImageFormat::Webp => {
+                let (mut stages, ff_input) = webp_source(input, workdir);
+                let last = stages.last().map(|_| 0.6).unwrap_or(1.0);
+                stages.push(Stage::ffmpeg(
+                    webp_args(&ff_input, output, params.image_quality, None),
+                    last,
+                ));
+                stages
+            }
+            ImageFormat::Jpg => vec![sips_encode(input, output, "jpg", params.image_quality)],
+            ImageFormat::Png => vec![sips_encode(input, output, "png", params.image_quality)],
+        }
     }
 }
 
 // MARK: Resize
 
 pub struct ImageResize;
-
-/// Downscale to fit within `max`×`max`, preserving aspect and never upscaling.
-fn scale_filter(max: u32) -> String {
-    format!("scale=min({max}\\,iw):min({max}\\,ih):force_original_aspect_ratio=decrease")
-}
 
 impl Op for ImageResize {
     fn id(&self) -> OpId {
@@ -143,22 +164,30 @@ impl Op for ImageResize {
         &self,
         input: &str,
         output: &str,
-        workdir: &Path,
+        _workdir: &Path,
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
         let out_ext = keep_ext(input);
-        let (mut stages, ff_input) = decode_prefix(input, workdir);
-        let mut args = base_args(&ff_input);
-        args.extend(progress_args());
-        args.push("-vf".into());
-        args.push(scale_filter(params.image_max_dim));
-        encode_args(&out_ext, 95, &mut args); // keep quality high on resize
-        args.extend(["-frames:v".into(), "1".into()]);
-        args.push(output.into());
-        let w = ff_weight(&stages);
-        stages.push(Stage::ffmpeg(args, w));
-        stages
+        if out_ext == "webp" {
+            // Source is a (non-HEIC) webp; ffmpeg reads it fine.
+            return vec![Stage::ffmpeg(
+                webp_args(input, output, 90, Some(scale_filter(params.image_max_dim))),
+                1.0,
+            )];
+        }
+        // sips resizes and keeps orientation. `-Z` fits within max, aspect kept.
+        let args = vec![
+            "-Z".into(),
+            params.image_max_dim.to_string(),
+            "-s".into(),
+            "format".into(),
+            sips_format(&out_ext).into(),
+            input.into(),
+            "--out".into(),
+            output.into(),
+        ];
+        vec![Stage::sips(args, 1.0)]
     }
 }
 
@@ -184,27 +213,25 @@ impl Op for ImageCompress {
         &self,
         input: &str,
         output: &str,
-        workdir: &Path,
+        _workdir: &Path,
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
         let out_ext = keep_ext(input);
-        let (mut stages, ff_input) = decode_prefix(input, workdir);
-        let mut args = base_args(&ff_input);
-        args.extend(progress_args());
-        encode_args(&out_ext, params.image_quality, &mut args);
-        args.extend(["-frames:v".into(), "1".into()]);
-        args.push(output.into());
-        let w = ff_weight(&stages);
-        stages.push(Stage::ffmpeg(args, w));
-        stages
+        if out_ext == "webp" {
+            return vec![Stage::ffmpeg(
+                webp_args(input, output, params.image_quality, None),
+                1.0,
+            )];
+        }
+        vec![sips_encode(input, output, &out_ext, params.image_quality)]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::{ImageFormat, Tool};
+    use crate::ops::Tool;
 
     fn img_probe() -> ProbeResult {
         ProbeResult {
@@ -220,78 +247,85 @@ mod tests {
     }
 
     #[test]
-    fn convert_defaults_to_jpg() {
-        let p = JobParams::default();
+    fn convert_to_jpg_uses_sips() {
+        let p = JobParams::default(); // jpg, q80
         assert_eq!(ImageConvert.output_ext("photo.png", &p), "jpg");
         let stages =
             ImageConvert.build_stages("photo.png", "photo.jpg", Path::new("/wd"), &img_probe(), &p);
-        assert_eq!(stages.len(), 1); // non-heic → no decode stage
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].tool, Tool::Sips);
         let a = &stages[0].args;
-        assert!(a.windows(2).any(|w| w == ["-q:v", jpg_qscale(80).as_str()]));
-        assert!(a.windows(2).any(|w| w == ["-frames:v", "1"]));
+        assert!(a.windows(2).any(|w| w == ["format", "jpeg"]));
+        assert!(a.windows(2).any(|w| w == ["formatOptions", "80"]));
         assert_eq!(a.last().unwrap(), "photo.jpg");
     }
 
     #[test]
-    fn convert_to_webp() {
-        let p = JobParams {
-            image_format: ImageFormat::Webp,
-            image_quality: 70,
-            ..Default::default()
-        };
-        assert_eq!(ImageConvert.output_ext("photo.png", &p), "webp");
-        let stages = ImageConvert.build_stages(
-            "photo.png",
-            "photo.webp",
-            Path::new("/wd"),
-            &img_probe(),
-            &p,
-        );
-        let a = &stages[0].args;
-        assert!(a.windows(2).any(|w| w == ["-c:v", "libwebp"]));
-        assert!(a.windows(2).any(|w| w == ["-quality", "70"]));
-    }
-
-    #[test]
-    fn heic_gets_a_sips_decode_stage_then_ffmpeg() {
+    fn convert_heic_to_jpg_is_sips_only() {
+        // HEIC → JPG needs no ffmpeg: sips reads HEIC and keeps orientation.
         let p = JobParams::default();
-        // HEIC can't keep its format for resize/compress → becomes jpg.
-        assert_eq!(ImageResize.output_ext("IMG.HEIC", &p), "jpg");
         let stages =
             ImageConvert.build_stages("IMG.HEIC", "IMG.jpg", Path::new("/wd"), &img_probe(), &p);
-        assert_eq!(stages.len(), 2);
+        assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].tool, Tool::Sips);
-        assert!(stages[0].args.iter().any(|s| s == "/wd/decoded.png"));
-        assert_eq!(stages[1].tool, Tool::Ffmpeg);
-        // ffmpeg stage reads the decoded PNG, not the HEIC.
-        assert!(stages[1].args.iter().any(|s| s == "/wd/decoded.png"));
-        assert_eq!(stages[1].args.last().unwrap(), "IMG.jpg");
     }
 
     #[test]
-    fn resize_keeps_ext_and_caps_dimension() {
+    fn convert_heic_to_webp_decodes_via_sips_jpeg_then_ffmpeg() {
+        let p = JobParams {
+            image_format: ImageFormat::Webp,
+            ..Default::default()
+        };
+        let stages =
+            ImageConvert.build_stages("IMG.HEIC", "IMG.webp", Path::new("/wd"), &img_probe(), &p);
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0].tool, Tool::Sips);
+        // Decode to JPEG (so ffmpeg bakes orientation), not PNG.
+        assert!(stages[0].args.iter().any(|s| s == "/wd/decoded.jpg"));
+        assert_eq!(stages[1].tool, Tool::Ffmpeg);
+        assert!(stages[1].args.iter().any(|s| s == "/wd/decoded.jpg"));
+        assert!(stages[1].args.windows(2).any(|w| w == ["-c:v", "libwebp"]));
+        assert_eq!(stages[1].args.last().unwrap(), "IMG.webp");
+    }
+
+    #[test]
+    fn convert_jpg_to_webp_is_ffmpeg_direct() {
+        let p = JobParams {
+            image_format: ImageFormat::Webp,
+            ..Default::default()
+        };
+        let stages =
+            ImageConvert.build_stages("pic.jpg", "pic.webp", Path::new("/wd"), &img_probe(), &p);
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].tool, Tool::Ffmpeg);
+    }
+
+    #[test]
+    fn resize_uses_sips_z_and_maps_heic_to_jpg() {
         let p = JobParams {
             image_max_dim: 1280,
             ..Default::default()
         };
-        assert_eq!(ImageResize.output_ext("shot.jpeg", &p), "jpeg");
+        assert_eq!(ImageResize.output_ext("IMG.HEIC", &p), "jpg");
         let stages = ImageResize.build_stages(
-            "shot.jpeg",
-            "shot-resized.jpeg",
+            "IMG.HEIC",
+            "IMG-resized.jpg",
             Path::new("/wd"),
             &img_probe(),
             &p,
         );
+        assert_eq!(stages[0].tool, Tool::Sips);
         let a = &stages[0].args;
-        assert!(a
-            .iter()
-            .any(|s| s.contains("force_original_aspect_ratio=decrease") && s.contains("1280")));
+        assert!(a.windows(2).any(|w| w == ["-Z", "1280"]));
+        assert!(a.windows(2).any(|w| w == ["format", "jpeg"]));
     }
 
     #[test]
-    fn compress_keeps_format() {
-        let p = JobParams::default();
-        assert_eq!(ImageCompress.output_ext("pic.jpg", &p), "jpg");
+    fn compress_jpg_uses_sips_quality() {
+        let p = JobParams {
+            image_quality: 60,
+            ..Default::default()
+        };
         let stages = ImageCompress.build_stages(
             "pic.jpg",
             "pic-compressed.jpg",
@@ -299,6 +333,10 @@ mod tests {
             &img_probe(),
             &p,
         );
-        assert!(stages[0].args.contains(&"-q:v".to_string()));
+        assert_eq!(stages[0].tool, Tool::Sips);
+        assert!(stages[0]
+            .args
+            .windows(2)
+            .any(|w| w == ["formatOptions", "60"]));
     }
 }
