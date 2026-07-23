@@ -1,8 +1,8 @@
 [package]
-name = "swiss_army_knife_core"
+name = "swift_army_knife_core"
 version = "0.1.0"
 edition = "2021"
-description = "Media engine for the Swiss Army Knife macOS app"
+description = "Media engine for the Swift Army Knife macOS app"
 
 [lib]
 # rlib so `cargo test` works; staticlib so the Swift app can link it (M2).

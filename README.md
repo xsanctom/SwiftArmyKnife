@@ -1,4 +1,4 @@
-# Swiss Army Knife
+# Swift Army Knife
 
 A tiny, native macOS app for quick video chores. Drop a video onto the window and
 pick what you want: **Convert to MP4 · Compress · Extract audio · Make GIF** — with
@@ -32,7 +32,7 @@ Finder drag ─▶ SwiftUI window ──swift-bridge──▶ Rust core ──sp
 
 ```sh
 ./build.sh
-open build/SwissArmyKnife.app
+open build/SwiftArmyKnife.app
 ```
 
 `build.sh` compiles the Rust core (release), generates the swift-bridge glue, compiles

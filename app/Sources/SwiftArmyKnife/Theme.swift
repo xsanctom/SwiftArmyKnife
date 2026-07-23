@@ -4,7 +4,7 @@
 import SwiftUI
 
 enum Theme {
-    /// Swiss-Army-knife red. Change here to re-brand the whole app.
+    /// Swift-Army-knife red. Change here to re-brand the whole app.
     static let brand = Color(red: 0.82, green: 0.18, blue: 0.15)
 
     static let pad: CGFloat = 24

@@ -1,4 +1,4 @@
-//! Swiss Army Knife — media engine.
+//! Swift Army Knife — media engine.
 //!
 //! Pure-Rust core that probes a dropped file, decides what can be done with it,
 //! builds the ffmpeg command sequence, runs it with progress + cancellation,

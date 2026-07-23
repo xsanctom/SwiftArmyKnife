@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::sync::atomic::AtomicBool;
-use swiss_army_knife_core::{menu_for, ops::JobParams, probe::probe, run_job_blocking};
+use swift_army_knife_core::{menu_for, ops::JobParams, probe::probe, run_job_blocking};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

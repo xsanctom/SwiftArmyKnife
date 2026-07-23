@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SwissArmyKnifeApp: App {
+struct SwiftArmyKnifeApp: App {
     @StateObject private var model = AppModel()
 
     init() {

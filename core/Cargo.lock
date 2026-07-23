@@ -197,7 +197,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "swiss_army_knife_core"
+name = "swift_army_knife_core"
 version = "0.1.0"
 dependencies = [
  "serde",

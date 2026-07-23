@@ -66,7 +66,7 @@ struct MissingToolsView: View {
             systemImage: "shippingbox",
             tint: Theme.brand,
             title: "ffmpeg isn’t installed",
-            subtitle: "Swiss Army Knife uses ffmpeg to do its work. Install it, then re-check."
+            subtitle: "Swift Army Knife uses ffmpeg to do its work. Install it, then re-check."
         ) {
             VStack(spacing: 12) {
                 HStack(spacing: 8) {

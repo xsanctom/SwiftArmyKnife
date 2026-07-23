@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Swiss Army Knife</string>
+	<string>Swift Army Knife</string>
 	<key>CFBundleDisplayName</key>
-	<string>Swiss Army Knife</string>
+	<string>Swift Army Knife</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.tombutler.SwissArmyKnife</string>
+	<string>com.tombutler.SwiftArmyKnife</string>
 	<key>CFBundleExecutable</key>
-	<string>SwissArmyKnife</string>
+	<string>SwiftArmyKnife</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

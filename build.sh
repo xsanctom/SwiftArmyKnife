@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Swiss Army Knife .app: compile the Rust core, then the Swift app,
+# Build the Swift Army Knife .app: compile the Rust core, then the Swift app,
 # then assemble a bundle. Apple-silicon only, no Xcode project required.
 set -euo pipefail
 
@@ -8,8 +8,8 @@ CORE="$ROOT/core"
 APP="$ROOT/app"
 GEN="$CORE/generated"
 BUILD="$ROOT/build"
-BUNDLE="$BUILD/SwissArmyKnife.app"
-BIN="$BUNDLE/Contents/MacOS/SwissArmyKnife"
+BUNDLE="$BUILD/SwiftArmyKnife.app"
+BIN="$BUNDLE/Contents/MacOS/SwiftArmyKnife"
 
 export PATH="$HOME/.cargo/bin:$PATH"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
@@ -30,8 +30,8 @@ swiftc \
     -I "$GEN" \
     $swift_sources \
     "$GEN/SwiftBridgeCore.swift" \
-    "$GEN/swiss_army_knife_core/swiss_army_knife_core.swift" \
-    -L "$CORE/target/release" -lswiss_army_knife_core \
+    "$GEN/swift_army_knife_core/swift_army_knife_core.swift" \
+    -L "$CORE/target/release" -lswift_army_knife_core \
     -framework SwiftUI -framework AppKit -framework UniformTypeIdentifiers \
     -o "$BIN"
 
