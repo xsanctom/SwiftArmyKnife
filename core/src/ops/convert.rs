@@ -96,7 +96,7 @@ impl Op for Convert {
         }
         args.extend(["-movflags".into(), "+faststart".into()]);
         args.push(output.into());
-        vec![Stage { args, weight: 1.0 }]
+        vec![Stage::ffmpeg(args, 1.0)]
     }
 }
 

@@ -43,14 +43,40 @@ impl OpId {
     }
 }
 
-/// One ffmpeg invocation within an operation. Most ops are a single stage;
+/// Which external tool a stage invokes. Almost everything is ffmpeg; image ops
+/// use a sips stage to decode formats ffmpeg mishandles (tiled HEIC/HEIF/AVIF).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    Ffmpeg,
+    Sips,
+}
+
+/// One tool invocation within an operation. Most ops are a single stage;
 /// GIF (palettegen → paletteuse) and target-size compress (two-pass) use two.
 /// `weight` is this stage's share of overall progress and must sum to ~1.0
 /// across an op's stages.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stage {
+    pub tool: Tool,
     pub args: Vec<String>,
     pub weight: f32,
+}
+
+impl Stage {
+    pub fn ffmpeg(args: Vec<String>, weight: f32) -> Stage {
+        Stage {
+            tool: Tool::Ffmpeg,
+            args,
+            weight,
+        }
+    }
+    pub fn sips(args: Vec<String>, weight: f32) -> Stage {
+        Stage {
+            tool: Tool::Sips,
+            args,
+            weight,
+        }
+    }
 }
 
 // ---- tunable parameters (the "Advanced" knobs) -------------------------------

@@ -1,9 +1,41 @@
-//! Image operations: convert, resize, compress. All ffmpeg-native (ffmpeg
-//! reads/writes stills), so they reuse the same engine as the video ops.
+//! Image operations: convert, resize, compress.
+//!
+//! Mostly ffmpeg-native (ffmpeg reads/writes stills). The exception is tiled
+//! HEIC/HEIF/AVIF, which ffmpeg decodes incorrectly (it returns a single tile —
+//! a small crop). For those we decode to a full-resolution PNG with macOS
+//! `sips` first, then run the normal ffmpeg op on that.
 
 use super::{base_args, ext_of, progress_args, JobParams, Op, OpId, Stage};
 use crate::probe::ProbeResult;
 use std::path::Path;
+
+/// Formats ffmpeg mishandles — decode natively with sips first.
+fn needs_native_decode(input: &str) -> bool {
+    matches!(ext_of(input).as_str(), "heic" | "heif" | "avif")
+}
+
+/// If the input needs native decoding, returns a leading sips stage that writes
+/// a full-res PNG into `workdir`, plus the path the ffmpeg stage should read.
+/// Otherwise no extra stage and the original input.
+fn decode_prefix(input: &str, workdir: &Path) -> (Vec<Stage>, String) {
+    if needs_native_decode(input) {
+        let decoded = workdir.join("decoded.png").to_string_lossy().into_owned();
+        let sips = Stage::sips(
+            vec![
+                "-s".into(),
+                "format".into(),
+                "png".into(),
+                input.into(),
+                "--out".into(),
+                decoded.clone(),
+            ],
+            0.4,
+        );
+        (vec![sips], decoded)
+    } else {
+        (Vec::new(), input.to_string())
+    }
+}
 
 /// Map a 1–100 quality to an mjpeg `-q:v` qscale (2 = best … 31 = worst).
 fn jpg_qscale(quality: u32) -> String {
@@ -26,13 +58,22 @@ fn encode_args(out_ext: &str, quality: u32, args: &mut Vec<String>) {
     }
 }
 
-/// Extension we keep for resize/compress (source ext, or jpg as a safe default).
+/// Output extension for ops that keep the source format. HEIC/HEIF/AVIF can't
+/// be written by ffmpeg, so those become JPG.
 fn keep_ext(input: &str) -> String {
-    let e = ext_of(input);
-    if e.is_empty() {
-        "jpg".into()
+    match ext_of(input).as_str() {
+        "" => "jpg".into(),
+        "heic" | "heif" | "avif" => "jpg".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Weight for the final ffmpeg stage given whether a decode stage precedes it.
+fn ff_weight(prefix: &[Stage]) -> f32 {
+    if prefix.is_empty() {
+        1.0
     } else {
-        e
+        0.6
     }
 }
 
@@ -58,17 +99,20 @@ impl Op for ImageConvert {
         &self,
         input: &str,
         output: &str,
-        _workdir: &Path,
+        workdir: &Path,
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
         let out_ext = params.image_format.ext();
-        let mut args = base_args(input);
+        let (mut stages, ff_input) = decode_prefix(input, workdir);
+        let mut args = base_args(&ff_input);
         args.extend(progress_args());
         encode_args(out_ext, params.image_quality, &mut args);
         args.extend(["-frames:v".into(), "1".into()]);
         args.push(output.into());
-        vec![Stage { args, weight: 1.0 }]
+        let w = ff_weight(&stages);
+        stages.push(Stage::ffmpeg(args, w));
+        stages
     }
 }
 
@@ -99,19 +143,22 @@ impl Op for ImageResize {
         &self,
         input: &str,
         output: &str,
-        _workdir: &Path,
+        workdir: &Path,
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
         let out_ext = keep_ext(input);
-        let mut args = base_args(input);
+        let (mut stages, ff_input) = decode_prefix(input, workdir);
+        let mut args = base_args(&ff_input);
         args.extend(progress_args());
         args.push("-vf".into());
         args.push(scale_filter(params.image_max_dim));
         encode_args(&out_ext, 95, &mut args); // keep quality high on resize
         args.extend(["-frames:v".into(), "1".into()]);
         args.push(output.into());
-        vec![Stage { args, weight: 1.0 }]
+        let w = ff_weight(&stages);
+        stages.push(Stage::ffmpeg(args, w));
+        stages
     }
 }
 
@@ -137,24 +184,27 @@ impl Op for ImageCompress {
         &self,
         input: &str,
         output: &str,
-        _workdir: &Path,
+        workdir: &Path,
         _probe: &ProbeResult,
         params: &JobParams,
     ) -> Vec<Stage> {
         let out_ext = keep_ext(input);
-        let mut args = base_args(input);
+        let (mut stages, ff_input) = decode_prefix(input, workdir);
+        let mut args = base_args(&ff_input);
         args.extend(progress_args());
         encode_args(&out_ext, params.image_quality, &mut args);
         args.extend(["-frames:v".into(), "1".into()]);
         args.push(output.into());
-        vec![Stage { args, weight: 1.0 }]
+        let w = ff_weight(&stages);
+        stages.push(Stage::ffmpeg(args, w));
+        stages
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::ImageFormat;
+    use crate::ops::{ImageFormat, Tool};
 
     fn img_probe() -> ProbeResult {
         ProbeResult {
@@ -173,14 +223,10 @@ mod tests {
     fn convert_defaults_to_jpg() {
         let p = JobParams::default();
         assert_eq!(ImageConvert.output_ext("photo.png", &p), "jpg");
-        let a = &ImageConvert.build_stages(
-            "photo.png",
-            "photo.jpg",
-            Path::new("/wd"),
-            &img_probe(),
-            &p,
-        )[0]
-        .args;
+        let stages =
+            ImageConvert.build_stages("photo.png", "photo.jpg", Path::new("/wd"), &img_probe(), &p);
+        assert_eq!(stages.len(), 1); // non-heic → no decode stage
+        let a = &stages[0].args;
         assert!(a.windows(2).any(|w| w == ["-q:v", jpg_qscale(80).as_str()]));
         assert!(a.windows(2).any(|w| w == ["-frames:v", "1"]));
         assert_eq!(a.last().unwrap(), "photo.jpg");
@@ -194,16 +240,32 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ImageConvert.output_ext("photo.png", &p), "webp");
-        let a = &ImageConvert.build_stages(
+        let stages = ImageConvert.build_stages(
             "photo.png",
             "photo.webp",
             Path::new("/wd"),
             &img_probe(),
             &p,
-        )[0]
-        .args;
+        );
+        let a = &stages[0].args;
         assert!(a.windows(2).any(|w| w == ["-c:v", "libwebp"]));
         assert!(a.windows(2).any(|w| w == ["-quality", "70"]));
+    }
+
+    #[test]
+    fn heic_gets_a_sips_decode_stage_then_ffmpeg() {
+        let p = JobParams::default();
+        // HEIC can't keep its format for resize/compress → becomes jpg.
+        assert_eq!(ImageResize.output_ext("IMG.HEIC", &p), "jpg");
+        let stages =
+            ImageConvert.build_stages("IMG.HEIC", "IMG.jpg", Path::new("/wd"), &img_probe(), &p);
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0].tool, Tool::Sips);
+        assert!(stages[0].args.iter().any(|s| s == "/wd/decoded.png"));
+        assert_eq!(stages[1].tool, Tool::Ffmpeg);
+        // ffmpeg stage reads the decoded PNG, not the HEIC.
+        assert!(stages[1].args.iter().any(|s| s == "/wd/decoded.png"));
+        assert_eq!(stages[1].args.last().unwrap(), "IMG.jpg");
     }
 
     #[test]
@@ -213,14 +275,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ImageResize.output_ext("shot.jpeg", &p), "jpeg");
-        let a = &ImageResize.build_stages(
+        let stages = ImageResize.build_stages(
             "shot.jpeg",
             "shot-resized.jpeg",
             Path::new("/wd"),
             &img_probe(),
             &p,
-        )[0]
-        .args;
+        );
+        let a = &stages[0].args;
         assert!(a
             .iter()
             .any(|s| s.contains("force_original_aspect_ratio=decrease") && s.contains("1280")));
@@ -230,14 +292,13 @@ mod tests {
     fn compress_keeps_format() {
         let p = JobParams::default();
         assert_eq!(ImageCompress.output_ext("pic.jpg", &p), "jpg");
-        let a = &ImageCompress.build_stages(
+        let stages = ImageCompress.build_stages(
             "pic.jpg",
             "pic-compressed.jpg",
             Path::new("/wd"),
             &img_probe(),
             &p,
-        )[0]
-        .args;
-        assert!(a.contains(&"-q:v".to_string()));
+        );
+        assert!(stages[0].args.contains(&"-q:v".to_string()));
     }
 }

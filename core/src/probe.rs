@@ -52,7 +52,7 @@ pub fn extension_looks_like_video(path: &str) -> bool {
 
 pub fn extension_looks_like_image(path: &str) -> bool {
     const IMAGE_EXTS: &[&str] = &[
-        "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "tiff", "tif", "tga",
+        "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "bmp", "tiff", "tif", "tga",
     ];
     ext_matches(path, IMAGE_EXTS)
 }
@@ -90,13 +90,67 @@ pub fn probe(ffprobe_bin: &str, path: &str) -> ProbeResult {
         ])
         .output();
 
-    match output {
+    let mut result = match output {
         Ok(out) if out.status.success() => {
             let json = String::from_utf8_lossy(&out.stdout);
             parse_probe_json(&json)
         }
         _ => ProbeResult::none(),
+    };
+
+    // ffprobe reports tiled HEIC/HEIF/AVIF as many small tile streams, so the
+    // dimensions it gives are one tile (e.g. 512×512). Correct them with the
+    // native decoder so the UI shows the real size.
+    if result.is_image
+        && matches!(
+            ext_matches_kind(path),
+            Some("heic") | Some("heif") | Some("avif")
+        )
+    {
+        if let Some((w, h)) = sips_dimensions(path) {
+            result.width = w;
+            result.height = h;
+        }
     }
+    result
+}
+
+/// The lowercased extension if it's one we special-case, else None.
+fn ext_matches_kind(path: &str) -> Option<&'static str> {
+    match Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("heic") => Some("heic"),
+        Some("heif") => Some("heif"),
+        Some("avif") => Some("avif"),
+        _ => None,
+    }
+}
+
+/// Real pixel dimensions via macOS `sips` (used to fix tiled-HEIC dimensions).
+fn sips_dimensions(path: &str) -> Option<(u32, u32)> {
+    let out = Command::new("/usr/bin/sips")
+        .args(["-g", "pixelWidth", "-g", "pixelHeight", path])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut w = None;
+    let mut h = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("pixelWidth:") {
+            w = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("pixelHeight:") {
+            h = v.trim().parse().ok();
+        }
+    }
+    Some((w?, h?))
 }
 
 // ---- pure parsing over the ffprobe JSON shape --------------------------------

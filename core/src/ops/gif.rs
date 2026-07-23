@@ -57,16 +57,7 @@ impl Op for Gif {
         p2.extend(["-loop".into(), "0".into()]);
         p2.push(output.into());
 
-        vec![
-            Stage {
-                args: p1,
-                weight: 0.5,
-            },
-            Stage {
-                args: p2,
-                weight: 0.5,
-            },
-        ]
+        vec![Stage::ffmpeg(p1, 0.5), Stage::ffmpeg(p2, 0.5)]
     }
 }
 

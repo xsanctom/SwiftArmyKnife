@@ -71,7 +71,7 @@ impl Op for Compress {
                 }
                 args.extend(["-movflags".into(), "+faststart".into()]);
                 args.push(output.into());
-                vec![Stage { args, weight: 1.0 }]
+                vec![Stage::ffmpeg(args, 1.0)]
             }
             CompressMode::TargetSize => {
                 let vk = target_video_kbps(params.target_mb, probe.duration_s, probe.has_audio);
@@ -125,16 +125,7 @@ impl Op for Compress {
                 p2.extend(["-movflags".into(), "+faststart".into()]);
                 p2.push(output.into());
 
-                vec![
-                    Stage {
-                        args: p1,
-                        weight: 0.5,
-                    },
-                    Stage {
-                        args: p2,
-                        weight: 0.5,
-                    },
-                ]
+                vec![Stage::ffmpeg(p1, 0.5), Stage::ffmpeg(p2, 0.5)]
             }
         }
     }

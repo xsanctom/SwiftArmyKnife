@@ -4,7 +4,7 @@
 //! executor ([`run_stages`]) spawns ffmpeg, streams `-progress` output to
 //! compute a percentage + ETA, and supports cooperative cancellation.
 
-use crate::ops::Stage;
+use crate::ops::{Stage, Tool};
 use std::fmt;
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
@@ -114,7 +114,13 @@ pub fn run_stages(
             return Err(EngineError::Cancelled);
         }
 
-        let mut child = Command::new(ffmpeg_bin)
+        // Most stages are ffmpeg; image ops may use a sips stage to decode
+        // formats ffmpeg mishandles (tiled HEIC/HEIF/AVIF).
+        let program = match stage.tool {
+            Tool::Ffmpeg => ffmpeg_bin,
+            Tool::Sips => "/usr/bin/sips",
+        };
+        let mut child = Command::new(program)
             .args(&stage.args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
