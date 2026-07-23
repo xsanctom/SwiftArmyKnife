@@ -22,8 +22,8 @@ struct ContentView: View {
                 }
             }
             .dropDestination(for: URL.self) { urls, _ in
-                guard droppable, let url = urls.first else { return false }
-                model.handleDrop(url.path)
+                guard droppable, !urls.isEmpty else { return false }
+                model.handleDrop(urls.map { $0.path })
                 return true
             } isTargeted: { dropTargeted = $0 }
             .onAppear { model.start() }
@@ -40,12 +40,12 @@ struct ContentView: View {
                 MissingToolsView()
             case .unsupported:
                 UnsupportedView()
-            case let .presets(probe, presets):
-                PresetsView(probe: probe, presets: presets)
-            case let .running(label):
-                RunningView(label: label)
-            case let .done(path):
-                DoneView(path: path)
+            case let .presets(info):
+                PresetsView(info: info)
+            case let .running(run):
+                RunningView(run: run)
+            case let .done(done):
+                DoneView(done: done)
             case let .error(message):
                 ErrorView(message: message)
             }

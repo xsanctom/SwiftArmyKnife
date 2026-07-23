@@ -1,7 +1,33 @@
-// App state machine + orchestration of engine calls off the main thread.
+// App state machine + orchestration. Works on a list of files (a single drop
+// is just a batch of one), running one job at a time with overall progress.
 
 import AppKit
 import SwiftUI
+
+struct MediaFile {
+    let path: String
+    let isImage: Bool // else video
+}
+
+struct PresetInfo {
+    let presets: [Preset]
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let count: Int
+}
+
+struct RunInfo {
+    let label: String
+    let index: Int // 1-based
+    let total: Int
+}
+
+struct DoneInfo {
+    let outputs: [String]
+    let failed: Int
+    let skipped: Int
+}
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -10,34 +36,33 @@ final class AppModel: ObservableObject {
         case probing
         case missingTools
         case unsupported
-        case presets(Probe, [Preset])
-        case running(String) // op label
-        case done(String) // output path
+        case presets(PresetInfo)
+        case running(RunInfo)
+        case done(DoneInfo)
         case error(String)
     }
 
     @Published var stage: Stage = .drop
-    @Published var progress: Double = 0 // 0...1
+    @Published var progress: Double = 0 // overall 0...1
     @Published var etaSeconds: Double = 0
-    private(set) var currentFile: String?
 
-    private var lastProbe: Probe?
-    private var jobId: UInt64?
-    private var pollTask: Task<Void, Never>?
+    private var files: [MediaFile] = []
+    private var singleProbe: Probe?
+    private var presetInfo: PresetInfo?
+
+    private var batchTask: Task<Void, Never>?
+    private var currentJobId: UInt64?
+    private var cancelRequested = false
 
     // --- headless verification hooks (no effect in normal interactive use) ---
-    // Driven by CLI args so the app can be launched via `open --args`:
-    //   --preload <file> --autorun <opId> --result <path>
     private var autorunOpId: UInt32?
     private var resultFile: String?
     private var autoCancelMs: UInt64?
     private var autorunParams = AdvancedParams()
 
-    /// Called from ContentView.onAppear. Auto-loads a preloaded file if the
-    /// verification flags/env are present; otherwise a no-op.
     func start() {
         let env = ProcessInfo.processInfo.environment
-        var preload = env["SAK_PRELOAD"]
+        var preloads: [String] = env["SAK_PRELOAD"].map { [$0] } ?? []
         autorunOpId = env["SAK_AUTORUN"].flatMap { UInt32($0) }
         resultFile = env["SAK_RESULT_FILE"]
 
@@ -46,7 +71,7 @@ final class AppModel: ObservableObject {
         while i < args.count {
             let next = i + 1 < args.count ? args[i + 1] : nil
             switch args[i] {
-            case "--preload": if let n = next { preload = n; i += 1 }
+            case "--preload": if let n = next { preloads.append(n); i += 1 }
             case "--autorun": if let n = next { autorunOpId = UInt32(n); i += 1 }
             case "--result": if let n = next { resultFile = n; i += 1 }
             case "--autocancel": if let n = next { autoCancelMs = UInt64(n); i += 1 }
@@ -67,64 +92,169 @@ final class AppModel: ObservableObject {
             i += 1
         }
 
-        // No ffmpeg/ffprobe → nothing works; say so clearly instead of
-        // mislabelling every dropped file as "not a video".
         if !Engine.toolsReady {
             stage = .missingTools
             return
         }
-
-        if let f = preload, FileManager.default.fileExists(atPath: f) {
-            handleDrop(f)
-        }
+        let existing = preloads.filter { FileManager.default.fileExists(atPath: $0) }
+        if !existing.isEmpty { handleDrop(existing) }
     }
 
-    /// Re-check for the tools (after the user installs them) and leave the
-    /// missing-tools screen if they're now present.
     func recheckTools() {
         if Engine.toolsReady { stage = .drop }
     }
 
-    func handleDrop(_ path: String) {
-        // A file can be dropped from any state; if the tools vanished, say so
-        // rather than probe-failing into a misleading "not a video".
+    func handleDrop(_ paths: [String]) {
         guard Engine.toolsReady else {
             stage = .missingTools
             return
         }
-        currentFile = path
         stage = .probing
-        // Main-actor Task; the blocking FFI call hops to a detached task.
         Task {
-            let probe = await Task.detached { Engine.probe(path) }.value
-            if probe.isMedia {
-                lastProbe = probe
-                stage = .presets(probe, Engine.presets(for: probe))
-                if let op = autorunOpId { run(opId: op, label: "auto", params: autorunParams) }
-            } else {
+            let gathered = await Task.detached { AppModel.gather(paths) }.value
+            files = gathered.files
+            singleProbe = gathered.single
+            guard !files.isEmpty else {
                 stage = .unsupported
-                finishAutorun(ok: false, detail: "unsupported file")
+                finishAutorun(ok: false, detail: "no media files")
+                return
             }
+            let info = buildPresetInfo()
+            presetInfo = info
+            stage = .presets(info)
+            if let op = autorunOpId { run(opId: op, label: "auto", params: autorunParams) }
         }
     }
 
-    func run(opId: UInt32, label: String, params: AdvancedParams = AdvancedParams()) {
-        guard let file = currentFile else { return }
-        progress = 0
-        etaSeconds = 0
-        stage = .running(label)
-        jobId = Engine.startJob(path: file, opId: opId, params: params)
-        // Poll via Swift concurrency (not NSTimer — the run loop isn't reliably
-        // servicing timers in every launch context).
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                guard let self else { return }
-                if self.pollOnce() { return } // terminal state reached
+    // MARK: gather (folder expansion + categorisation, off-main)
+
+    struct Gathered {
+        let files: [MediaFile]
+        let single: Probe?
+    }
+
+    nonisolated static func gather(_ paths: [String]) -> Gathered {
+        let fm = FileManager.default
+        var mediaPaths: [String] = []
+        for p in paths {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: p, isDirectory: &isDir) else { continue }
+            if isDir.boolValue {
+                // Expand a folder to the media files it contains (recursively).
+                if let en = fm.enumerator(atPath: p) {
+                    for case let rel as String in en {
+                        let full = (p as NSString).appendingPathComponent(rel)
+                        if Engine.classifyPath(full) != 0 { mediaPaths.append(full) }
+                    }
+                }
+            } else {
+                mediaPaths.append(p) // explicitly dropped file — kind decided below
             }
         }
 
-        // Test hook: auto-cancel after a delay to exercise the cancel path.
+        // A single file gets the richer content-based probe (nice header, and
+        // catches oddities like an audio-only .webm).
+        if mediaPaths.count == 1 {
+            let probe = Engine.probe(mediaPaths[0])
+            if probe.isMedia {
+                return Gathered(files: [MediaFile(path: mediaPaths[0], isImage: probe.isImage)], single: probe)
+            }
+            return Gathered(files: [], single: nil)
+        }
+
+        // A batch is categorised by extension — fast, no per-file subprocess.
+        var files: [MediaFile] = []
+        for p in mediaPaths {
+            switch Engine.classifyPath(p) {
+            case 1: files.append(MediaFile(path: p, isImage: false))
+            case 2: files.append(MediaFile(path: p, isImage: true))
+            default: break
+            }
+        }
+        return Gathered(files: files, single: nil)
+    }
+
+    private func buildPresetInfo() -> PresetInfo {
+        let videos = files.filter { !$0.isImage }.count
+        let images = files.count - videos
+        let presets = Engine.presets(video: videos > 0, image: images > 0)
+
+        if files.count == 1, let p = singleProbe {
+            return PresetInfo(
+                presets: presets,
+                title: URL(fileURLWithPath: files[0].path).lastPathComponent,
+                subtitle: singleSummary(p),
+                symbol: p.isImage ? "photo.fill" : "video.fill",
+                count: 1
+            )
+        }
+        var parts: [String] = []
+        if videos > 0 { parts.append("\(videos) video\(videos == 1 ? "" : "s")") }
+        if images > 0 { parts.append("\(images) image\(images == 1 ? "" : "s")") }
+        return PresetInfo(
+            presets: presets,
+            title: "\(files.count) files",
+            subtitle: parts.joined(separator: " · "),
+            symbol: "square.stack.3d.up.fill",
+            count: files.count
+        )
+    }
+
+    private func singleSummary(_ p: Probe) -> String {
+        var parts: [String] = []
+        if p.width > 0 { parts.append("\(p.width)×\(p.height)") }
+        if p.duration > 0 { parts.append(formatDuration(p.duration)) }
+        if !p.videoCodec.isEmpty { parts.append(p.videoCodec.uppercased()) }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    // MARK: run (sequential batch)
+
+    func run(opId: UInt32, label: String, params: AdvancedParams = AdvancedParams()) {
+        let targetImage = opId >= 10
+        let queue = files.filter { $0.isImage == targetImage }
+        let skipped = files.count - queue.count
+        guard !queue.isEmpty else { return }
+
+        cancelRequested = false
+        progress = 0
+        etaSeconds = 0
+        let batchStart = Date()
+
+        batchTask = Task { [weak self] in
+            var outputs: [String] = []
+            var failed = 0
+            for (i, file) in queue.enumerated() {
+                guard let self else { return }
+                if self.cancelRequested { break }
+                self.stage = .running(RunInfo(label: label, index: i + 1, total: queue.count))
+
+                let id = Engine.startJob(path: file.path, opId: opId, params: params)
+                self.currentJobId = id
+
+                var terminal = false
+                while !terminal {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    if self.cancelRequested { Engine.cancel(id) }
+                    let snap = Engine.poll(id)
+                    let overall = (Double(i) + snap.pct) / Double(queue.count)
+                    self.progress = overall
+                    let elapsed = Date().timeIntervalSince(batchStart)
+                    self.etaSeconds = overall > 0.02 ? elapsed * (1 - overall) / overall : 0
+                    switch snap.status {
+                    case .running: break
+                    case .done: outputs.append(snap.outputPath); terminal = true
+                    case .error: failed += 1; terminal = true
+                    case .cancelled: terminal = true
+                    }
+                    if terminal { Engine.release(id); self.currentJobId = nil }
+                }
+                if self.cancelRequested { break }
+            }
+            guard let self else { return }
+            self.finishBatch(outputs: outputs, failed: failed, skipped: skipped)
+        }
+
         if let ms = autoCancelMs {
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: ms * 1_000_000)
@@ -133,66 +263,44 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func cancelJob() {
-        if let id = jobId { Engine.cancel(id) }
-        // The poll loop observes the cancelled status and returns to presets.
-    }
-
-    /// One poll tick. Returns true when the job reached a terminal state.
-    @discardableResult
-    private func pollOnce() -> Bool {
-        guard let id = jobId else { return true }
-        let snap = Engine.poll(id)
-        progress = snap.pct
-        etaSeconds = snap.etaSeconds
-        switch snap.status {
-        case .running:
-            return false
-        case .done:
-            finishJob()
-            stage = .done(snap.outputPath)
-            finishAutorun(ok: true, detail: snap.outputPath)
-            return true
-        case .error:
-            finishJob()
-            stage = .error(snap.error)
-            finishAutorun(ok: false, detail: snap.error)
-            return true
-        case .cancelled:
-            finishJob()
-            if let probe = lastProbe {
-                stage = .presets(probe, Engine.presets(for: probe))
-            } else {
-                stage = .drop
-            }
-            // In interactive use autorunOpId is nil, so this is a no-op and we
-            // simply return to presets. Under the test hook it records + quits.
+    private func finishBatch(outputs: [String], failed: Int, skipped: Int) {
+        currentJobId = nil
+        batchTask = nil
+        if cancelRequested {
+            // Return to the presets for this drop.
+            if let info = presetInfo { stage = .presets(info) } else { stage = .drop }
             finishAutorun(ok: false, detail: "cancelled")
-            return true
+            return
         }
+        stage = .done(DoneInfo(outputs: outputs, failed: failed, skipped: skipped))
+        finishAutorun(
+            ok: failed == 0,
+            detail: "\(outputs.count) ok, \(failed) failed, \(skipped) skipped"
+        )
     }
 
-    private func finishJob() {
-        pollTask?.cancel()
-        pollTask = nil
-        if let id = jobId {
-            Engine.release(id)
-            jobId = nil
-        }
+    func cancelJob() {
+        cancelRequested = true
+        if let id = currentJobId { Engine.cancel(id) }
     }
 
     func reset() {
-        finishJob()
-        currentFile = nil
-        lastProbe = nil
+        cancelRequested = true
+        batchTask?.cancel()
+        batchTask = nil
+        if let id = currentJobId { Engine.cancel(id); Engine.release(id); currentJobId = nil }
+        files = []
+        singleProbe = nil
+        presetInfo = nil
         stage = .drop
     }
 
-    func reveal(_ path: String) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    func reveal(_ paths: [String]) {
+        let urls = paths.map { URL(fileURLWithPath: $0) }
+        if urls.isEmpty { return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
     }
 
-    /// When driven by SAK_AUTORUN, write the outcome and quit so a test can read it.
     private func finishAutorun(ok: Bool, detail: String) {
         guard autorunOpId != nil else { return }
         if let rf = resultFile {

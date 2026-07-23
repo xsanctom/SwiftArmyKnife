@@ -105,13 +105,14 @@ enum Engine {
         )
     }
 
-    /// The preset menu for a probed file's kind (video ops vs image ops).
-    static func presets(for probe: Probe) -> [Preset] {
-        var result: [Preset] = []
-        for id in menu_op_ids(probe.isVideo, probe.isImage) {
-            result.append(Preset(id: id, label: op_label(id).toString()))
-        }
-        return result
+    /// Preset menu for the kinds present (union for a mixed batch).
+    static func presets(video: Bool, image: Bool) -> [Preset] {
+        menu_op_ids(video, image).map { Preset(id: $0, label: op_label($0).toString()) }
+    }
+
+    /// Fast extension-only classification: 0 = not media, 1 = video, 2 = image.
+    static func classifyPath(_ path: String) -> Int {
+        Int(classify_path(path))
     }
 
     /// Start a job on a Rust background thread; returns a job id to poll.

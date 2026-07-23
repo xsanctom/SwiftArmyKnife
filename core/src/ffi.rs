@@ -62,6 +62,10 @@ mod ffi {
         // Inspect a file. Runs a fast extension check, then ffprobe.
         fn probe_file(path: String) -> ProbeInfo;
 
+        // Fast extension-only classification for batch categorisation:
+        // 0 = not media, 1 = video, 2 = image. No subprocess.
+        fn classify_path(path: String) -> u32;
+
         // Op ids of the preset menu for the probed file's kind, in display
         // order. (swift-bridge can't return a Vec of shared structs, so the UI
         // pairs these ids with op_label() to build its buttons.)
@@ -148,11 +152,27 @@ fn none_info() -> ffi::ProbeInfo {
     }
 }
 
+fn classify_path(path: String) -> u32 {
+    // Extension-only (fast, no ffprobe) — used to categorise a batch drop.
+    if std::path::Path::new(&path).extension().is_none() {
+        return 0;
+    }
+    if probe::extension_looks_like_image(&path) {
+        2
+    } else if probe::extension_looks_like_video(&path) {
+        1
+    } else {
+        0
+    }
+}
+
 fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32> {
-    // menu_for only reads the kind flags; the rest is filler.
-    let probe = probe::ProbeResult {
-        is_video,
-        is_image,
+    // Union of the applicable ops for the kinds present. A same-kind batch
+    // yields just that kind's ops; a mixed batch yields both sets.
+    let mut ids = Vec::new();
+    let filler = |video: bool, image: bool| probe::ProbeResult {
+        is_video: video,
+        is_image: image,
         duration_s: 0.0,
         width: 0,
         height: 0,
@@ -160,7 +180,13 @@ fn menu_op_ids(is_video: bool, is_image: bool) -> Vec<u32> {
         video_codec: String::new(),
         audio_codec: String::new(),
     };
-    menu_for(&probe).into_iter().map(|m| m.op_id).collect()
+    if is_video {
+        ids.extend(menu_for(&filler(true, false)).into_iter().map(|m| m.op_id));
+    }
+    if is_image {
+        ids.extend(menu_for(&filler(false, true)).into_iter().map(|m| m.op_id));
+    }
+    ids
 }
 
 fn op_label(op_id: u32) -> String {

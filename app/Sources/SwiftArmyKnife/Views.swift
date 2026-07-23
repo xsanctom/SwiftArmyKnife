@@ -117,20 +117,19 @@ struct UnsupportedView: View {
 
 struct PresetsView: View {
     @EnvironmentObject var model: AppModel
-    let probe: Probe
-    let presets: [Preset]
+    let info: PresetInfo
 
     @State private var showingAdvanced = false
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            FileHeader(name: fileName, detail: summary, symbol: probe.isImage ? "photo.fill" : "video.fill") { model.reset() }
+            FileHeader(name: info.title, detail: info.subtitle, symbol: info.symbol) { model.reset() }
 
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(presets) { preset in
+                ForEach(info.presets) { preset in
                     PresetCard(preset: preset) {
-                        model.run(opId: preset.id, label: preset.label)
+                        model.run(opId: preset.id, label: runLabel(preset))
                     }
                 }
             }
@@ -148,22 +147,15 @@ struct PresetsView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .padding(Theme.pad)
         .sheet(isPresented: $showingAdvanced) {
-            AdvancedSheet(presets: presets) { preset, params in
-                model.run(opId: preset.id, label: preset.label, params: params)
+            AdvancedSheet(presets: info.presets) { preset, params in
+                model.run(opId: preset.id, label: runLabel(preset), params: params)
             }
         }
     }
 
-    private var fileName: String {
-        URL(fileURLWithPath: model.currentFile ?? "").lastPathComponent
-    }
-
-    private var summary: String {
-        var parts: [String] = []
-        if probe.width > 0 { parts.append("\(probe.width)×\(probe.height)") }
-        if probe.duration > 0 { parts.append(formatDuration(probe.duration)) }
-        if !probe.videoCodec.isEmpty { parts.append(probe.videoCodec.uppercased()) }
-        return parts.joined(separator: "  ·  ")
+    // "Converting" etc. reads better than the button label while running.
+    private func runLabel(_ preset: Preset) -> String {
+        preset.label
     }
 }
 
@@ -249,18 +241,18 @@ struct PresetCard: View {
 
 struct RunningView: View {
     @EnvironmentObject var model: AppModel
-    let label: String
+    let run: RunInfo
 
     var body: some View {
         VStack(spacing: 20) {
             VStack(spacing: 6) {
-                Text(label)
+                Text("\(run.label)…")
                     .font(.title3.weight(.semibold))
-                Text(fileName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if run.total > 1 {
+                    Text("File \(run.index) of \(run.total)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             VStack(spacing: 8) {
@@ -286,31 +278,44 @@ struct RunningView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Theme.pad)
     }
-
-    private var fileName: String {
-        URL(fileURLWithPath: model.currentFile ?? "").lastPathComponent
-    }
 }
 
 // MARK: - Done
 
 struct DoneView: View {
     @EnvironmentObject var model: AppModel
-    let path: String
+    let done: DoneInfo
+
     var body: some View {
         StatusScaffold(
-            systemImage: "checkmark.circle.fill",
-            tint: .green,
-            title: "Done",
-            subtitle: URL(fileURLWithPath: path).lastPathComponent
+            systemImage: done.failed > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+            tint: done.failed > 0 ? .orange : .green,
+            title: title,
+            subtitle: subtitle
         ) {
             HStack(spacing: 10) {
-                Button("Reveal in Finder") { model.reveal(path) }
+                Button("Reveal in Finder") { model.reveal(done.outputs) }
                     .buttonStyle(.borderedProminent)
+                    .disabled(done.outputs.isEmpty)
                 Button("Do another") { model.reset() }
                     .buttonStyle(.bordered)
             }
         }
+    }
+
+    private var title: String {
+        if done.outputs.count == 1 && done.failed == 0 { return "Done" }
+        return "\(done.outputs.count) of \(done.outputs.count + done.failed) done"
+    }
+
+    private var subtitle: String {
+        if done.outputs.count == 1 && done.failed == 0 {
+            return URL(fileURLWithPath: done.outputs[0]).lastPathComponent
+        }
+        var parts: [String] = []
+        if done.failed > 0 { parts.append("\(done.failed) failed") }
+        if done.skipped > 0 { parts.append("\(done.skipped) skipped (other type)") }
+        return parts.isEmpty ? "Saved next to the originals" : parts.joined(separator: " · ")
     }
 }
 
